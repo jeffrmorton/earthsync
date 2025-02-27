@@ -251,5 +251,3 @@ Deployment Notes
 -   **Custom Devices**: For visual entrainment devices with custom UUIDs, replace custom_service_id and frequency_control_char in DeviceIntegrationScreen with actual values from the device's documentation.
 
 * * * * *
-
-Save this content as README.md in your project root directory (e.g., earthsync/ or earthsync-server/). Let me know if you need additional sections (e.g., project overview, contribution guidelines) or further assistance!
