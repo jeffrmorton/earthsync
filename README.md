@@ -108,6 +108,146 @@ Server Deployment
 
         `pm2 start src/server.js`
 
+### Instructions for Building and Running the Docker Container
+
+#### Prerequisites
+
+* **Docker**: Install Docker on your system (e.g., Docker Desktop for Windows/Mac, or Docker Engine for Linux).
+
+* **Directory**: Ensure you're working in the earthsync-server/ directory containing package.json, .env, and the src/ folder.
+
+#### Steps
+
+1.  **Create the Dockerfile**:
+
+  * Save the above content as Dockerfile (no extension) in the earthsync-server/ directory.
+
+3.  **Build the Docker Image**:
+
+  * Open a terminal and navigate to earthsync-server/.
+
+  * Run the following command to build the Docker image:
+
+    text
+
+    WrapCopy
+
+    `docker build -t earthsync-server:latest .`
+
+  * Explanation:
+
+    * -t earthsync-server:latest: Tags the image as earthsync-server with the latest version.
+
+    * .: Specifies the current directory as the build context.
+
+5.  **Run the Docker Container**:
+
+  * Start the container with this command:
+
+    text
+
+    WrapCopy
+
+    `docker run -d -p 3000:3000 --name earthsync-server earthsync-server:latest`
+
+  * Explanation:
+
+    * -d: Runs the container in detached mode (background).
+
+    * -p 3000:3000: Maps port 3000 on the host to port 3000 in the container.
+
+    * --name earthsync-server: Names the container for easy reference.
+
+    * earthsync-server:latest: Specifies the image to run.
+
+7.  **Verify the Container**:
+
+  * Check that the container is running:
+
+    text
+
+    WrapCopy
+
+    `docker ps`
+
+  * You should see earthsync-server listed with status "Up".
+
+  * Test the server by accessing http://localhost:3000 in a browser or via a tool like curl.
+
+9.  **Environment Variables**:
+
+  * If you need to override .env settings without modifying the file, pass them during the run command:
+
+    text
+
+    WrapCopy
+
+    `docker run -d -p 3000:3000 --name earthsync-server -e "DATABASE_URL=your-db-url" -e "JWT_SECRET=your-secret" earthsync-server:latest`
+
+  * Alternatively, update the .env file before building the image.
+
+11. **Stop and Remove the Container (Optional)**:
+
+  * Stop the running container:
+
+    text
+
+    WrapCopy
+
+    `docker stop earthsync-server`
+
+  * Remove the container:
+
+    text
+
+    WrapCopy
+
+    `docker rm earthsync-server`
+
+13. **Deploy to a Cloud Service (Optional)**:
+
+  * **Docker Hub**:
+
+    1. Tag the image:
+
+      text
+
+      WrapCopy
+
+      `docker tag earthsync-server:latest yourusername/earthsync-server:latest`
+
+    3. Push to Docker Hub (after logging in with docker login):
+
+      text
+
+      WrapCopy
+
+      `docker push yourusername/earthsync-server:latest`
+
+  * **AWS ECS**:
+
+    1. Push the image to Amazon ECR (Elastic Container Registry).
+
+    3. Create an ECS task definition and service, referencing the image.
+
+    5. Configure networking (e.g., ALB for HTTPS).
+
+* * *
+
+### Notes
+
+* **Dependencies**: The Dockerfile assumes all dependencies (e.g., PostgreSQL, Redis) are external services accessible via the network. Ensure these are running and their URLs are correctly set in .env.
+
+* **SSL**: For production with WSS, you'll need to handle SSL outside the container (e.g., via a reverse proxy like Nginx) or modify the Dockerfile to include SSL certificates and update server.js to use HTTPS.
+
+* **Volumes**: If you need persistent data (e.g., logs), add a volume mapping:
+
+  text
+
+  WrapCopy
+
+  `docker run -d -p 3000:3000 -v /host/path:/app/logs earthsync-server:latest`
+
 * * * * *
 
 Client Deployment
