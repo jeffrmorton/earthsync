@@ -1,0 +1,97 @@
+---
+# Secret for environment variables
+apiVersion: v1
+kind: Secret
+metadata:
+  name: earthsync-server-secret
+type: Opaque
+data:
+  # Base64-encoded values (replace with your actual encoded values)
+  DATABASE_URL: cG9zdGdyZXM6Ly91c2VyOnBhc3N3b3JkQHBvc3RncmVzLWhvc3Q6NTQzMi9lYXJ0aHN5bmNfZGI=  # postgres://user:password@postgres-host:5432/earthsync_db
+  JWT_SECRET: eW91ci1zZWN1cmUtc2VjcmV0LWtleQ==                                      # your-secure-secret-key
+  FIREBASE_SERVICE_ACCOUNT: L3BhdGgvdG8vc2VydmljZUFjY291bnQuanNvbg==                  # /path/to/serviceAccount.json
+  REDIS_URL: cmVkaXM6Ly86eW91ci1yZWRpcy1wYXNzd29yZEByZWRpcy1ob3N0OjYzNzk=             # redis://:your-redis-password@redis-host:6379
+  SENTRY_DSN: aHR0cHM6Ly95b3VyLXNlbnRyeS1kc25Ac2VudHJ5LmlvL3lvdXItcHJvamVjdC1pZA==  # https://your-sentry-dsn@sentry.io/your-project-id
+  API_KEY_SECRET: eW91ci1hcGktc2VjcmV0                                            # your-api-key-secret
+
+---
+# Deployment for EarthSync server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: earthsync-server-deployment
+  labels:
+    app: earthsync-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: earthsync-server
+  template:
+    metadata:
+      labels:
+        app: earthsync-server
+    spec:
+      containers:
+      - name: earthsync-server
+        image: yourusername/earthsync-server:latest  # Replace with your Docker Hub username or registry
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-server-secret
+              key: DATABASE_URL
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-server-secret
+              key: JWT_SECRET
+        - name: PORT
+          value: "3000"
+        - name: FIREBASE_SERVICE_ACCOUNT
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-server-secret
+              key: FIREBASE_SERVICE_ACCOUNT
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-server-secret
+              key: REDIS_URL
+        - name: SENTRY_DSN
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-server-secret
+              key: SENTRY_DSN
+        - name: API_KEY_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-server-secret
+              key: API_KEY_SECRET
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "512Mi"
+          requests:
+            cpu: "0.2"
+            memory: "256Mi"
+
+---
+# Service for EarthSync server
+apiVersion: v1
+kind: Service
+metadata:
+  name: earthsync-server-service
+  labels:
+    app: earthsync-server
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+  selector:
+    app: earthsync-server

@@ -248,6 +248,158 @@ Server Deployment
 
   `docker run -d -p 3000:3000 -v /host/path:/app/logs earthsync-server:latest`
 
+### Instructions for Using the Manifest File
+
+#### Prerequisites
+
+* **Kubernetes Cluster**: Ensure you have a running Kubernetes cluster (e.g., Minikube for local testing, or a cloud provider like AWS EKS, GKE).
+
+* **kubectl**: Install the Kubernetes command-line tool (kubectl) on your system.
+
+* **Docker Image**: Build and push the EarthSync server image to a container registry:
+
+  bash
+
+  WrapCopy
+
+  `docker build -t yourusername/earthsync-server:latest . docker push yourusername/earthsync-server:latest`
+
+#### Steps
+
+1.  **Create the Manifest File**:
+
+  * Save the content above as earthsync-server.yaml in a directory of your choice (e.g., earthsync-server/).
+
+3.  **Customize the Manifest**:
+
+  * Replace yourusername/earthsync-server:latest with your actual Docker image repository and tag.
+
+  * Update the data section in the Secret with Base64-encoded values for your environment variables. To encode a value:
+
+    bash
+
+    WrapCopy
+
+    `echo -n "your-value" | base64`\
+    Example:
+
+    bash
+
+    WrapCopy
+
+    `echo -n "postgres://user:password@postgres-host:5432/earthsync_db" | base64`\
+    Replace the placeholder values in the Secret (data section) with the encoded outputs.
+
+5.  **Apply the Manifest to Kubernetes**:
+
+  * Open a terminal and navigate to the directory containing earthsync-server.yaml.
+
+  * Apply the manifest:
+
+    bash
+
+    WrapCopy
+
+    `kubectl apply -f earthsync-server.yaml`
+
+  * This creates the Secret, Deployment, and Service in your cluster.
+
+7.  **Verify Deployment**:
+
+  * Check the pods:
+
+    bash
+
+    WrapCopy
+
+    `kubectl get pods`
+
+    * Look for a pod named something like earthsync-server-deployment-xxx with status "Running".
+
+  * Check the service:
+
+    bash
+
+    WrapCopy
+
+    `kubectl get svc`
+
+    * You should see earthsync-server-service with a ClusterIP.
+
+  * Check the secret:
+
+    bash
+
+    WrapCopy
+
+    `kubectl get secret earthsync-server-secret`
+
+9.  **Test Connectivity**:
+
+  * For local testing with Minikube:
+
+    bash
+
+    WrapCopy
+
+    `minikube service earthsync-server-service --url`
+
+    * This provides a URL to access the service.
+
+  * For a cluster environment, use kubectl port-forward to test locally:
+
+    bash
+
+    WrapCopy
+
+    `kubectl port-forward deployment/earthsync-server-deployment 3000:3000`
+
+    * Then access http://localhost:3000.
+
+11. **Expose Externally (Optional)**:
+
+  * Change spec.type from ClusterIP to LoadBalancer in the Service section and reapply:
+
+    bash
+
+    WrapCopy
+
+    `kubectl apply -f earthsync-server.yaml`
+
+  * Get the external IP:
+
+    bash
+
+    WrapCopy
+
+    `kubectl get svc`
+
+  * Alternatively, use an Ingress controller for more complex routing.
+
+13. **Clean Up (Optional)**:
+
+  * Delete the resources:
+
+    bash
+
+    WrapCopy
+
+    `kubectl delete -f earthsync-server.yaml`
+
+* * *
+
+### Notes
+
+* **External Dependencies**: The manifest assumes PostgreSQL and Redis are running separately (e.g., as other Kubernetes services or managed instances). Update the DATABASE_URL and REDIS_URL in the Secret with the correct connection strings.
+
+* **Secrets**: The Secret stores sensitive data in Base64 format. For production, consider using a secrets management solution (e.g., HashiCorp Vault) or Kubernetes secrets from an external source instead of embedding them in the manifest.
+
+* **Scaling**: Adjust replicas in the Deployment to scale the number of pods (e.g., replicas: 3).
+
+* **Resources**: The resources section sets CPU/memory limits and requests. Modify these based on your cluster's capacity and application needs.
+
+* **SSL**: For WebSocket Secure (WSS) in production, configure an Ingress with TLS or handle SSL termination outside Kubernetes (e.g., via a load balancer).
+
 * * * * *
 
 Client Deployment
