@@ -1,0 +1,26 @@
+{
+  "name": "earthsync-server",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.13.0",
+    "jsonwebtoken": "^9.0.2",
+    "bcrypt": "^5.1.1",
+    "pg": "^8.11.3",
+    "dotenv": "^16.3.1",
+    "express-validator": "^7.0.1",
+    "firebase-admin": "^11.10.1",
+    "redis": "^4.6.7",
+    "@sentry/node": "^7.63.0",
+    "express-rate-limit": "^6.7.0",
+    "tensorflow": "@tensorflow/tfjs-node"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
