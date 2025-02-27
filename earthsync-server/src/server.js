@@ -86,6 +86,17 @@ app.get('/schumann-frequency', verifyToken, async (req, res) => {
   }
 });
 
+app.post('/schumann-frequency', verifyApiKeyMiddleware, async (req, res) => {
+  try {
+    const { frequency, timestamp } = req.body;
+    await saveFrequency(frequency);
+    res.json({ message: 'Frequency recorded', frequency, timestamp });
+  } catch (err) {
+    Sentry.captureException(err);
+    res.status(500).json({ error: 'Failed to record frequency' });
+  }
+});
+
 app.post('/set-interval', verifyToken, [
   body('interval').isInt({ min: 1000, max: 60000 }),
   body('activity').optional().isIn(['Active', 'Background']),
