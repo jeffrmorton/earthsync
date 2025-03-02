@@ -32,7 +32,11 @@ earthsync-server/
 ├── test-earthsync-server.sh # Automated test script
 └── README.md              # Project documentation
 
-## Setup (Docker)### 1. Clone the RepositoryIf starting from a Git repository:\`\`\`bashgit clone cd earthsync-server
+## Setup (Docker)
+
+### 1\. Clone the RepositoryIf starting from a Git repository:
+
+git clone cd earthsync-server
 
 ### 2\. Install Dependencies
 
@@ -64,27 +68,27 @@ Running the Server (Docker)
 
 ### 1\. Start PostgreSQL Container
 
-bashWrapCopydocker run -d \\ --name earthsync-postgres \\ -e POSTGRES\_USER=earthsync\_user \\ -e POSTGRES\_PASSWORD=your\_secure\_password \\ -e POSTGRES\_DB=earthsync\_db \\ -p 5432:5432 \\ -v earthsync\_data:/var/lib/postgresql/data \\ postgres:14
+docker run -d \\ --name earthsync-postgres \\ -e POSTGRES\_USER=earthsync\_user \\ -e POSTGRES\_PASSWORD=your\_secure\_password \\ -e POSTGRES\_DB=earthsync\_db \\ -p 5432:5432 \\ -v earthsync\_data:/var/lib/postgresql/data \\ postgres:14
 
 ### 2\. Start Redis Container
 
-bashWrapCopydocker run -d \\ --name earthsync-redis \\ -e REDIS\_PASSWORD=your\_secure\_redis\_password \\ -p 6379:6379 \\ -v earthsync\_redis\_data:/data \\ redis:7 redis-server --requirepass your\_secure\_redis\_password
+docker run -d \\ --name earthsync-redis \\ -e REDIS\_PASSWORD=your\_secure\_redis\_password \\ -p 6379:6379 \\ -v earthsync\_redis\_data:/data \\ redis:7 redis-server --requirepass your\_secure\_redis\_password
 
 ### 3\. Start Server Container
 
-bashWrapCopydocker run -d \\ --name earthsync-server \\ -p 3000:3000 \\ --link earthsync-redis:redis \\ --link earthsync-postgres:postgres \\ earthsync-server:latest
+docker run -d \\ --name earthsync-server \\ -p 3000:3000 \\ --link earthsync-redis:redis \\ --link earthsync-postgres:postgres \\ earthsync-server:latest
 
 ### 4\. Verify Containers
 
 Check that all containers are running:
 
-bashWrapCopydocker ps
+docker ps
 
 *   Expected: earthsync-postgres, earthsync-redis, and earthsync-server listed with "Up" status.
 
 ### 5\. Review Logs
 
-bashWrapCopydocker logs earthsync-server
+docker logs earthsync-server
 
 *   Confirm successful startup:textWrapCopyInitializing database schema...Users table created or already existsFrequency\_history table created or already existsUsage\_logs table created or already existsApi\_keys table created or already existsTest user inserted or already existsDatabase schema initialized successfullyConnected to PostgreSQLRedis connections initialized successfullyServer running on port 3000
 

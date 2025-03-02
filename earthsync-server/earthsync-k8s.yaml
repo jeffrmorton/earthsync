@@ -1,0 +1,184 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: earthsync-secrets
+type: Opaque
+data:
+  postgres-password: eW91ci1zZWN1cmUtcGFzc3dvcmQ= # base64: your_secure_password
+  redis-password: eW91ci1zZWN1cmUtcmVkaXMtcGFzc3dvcmQ= # base64: your_secure_redis_password
+  jwt-secret: eW91ci1zZWN1cmUtc2VjcmV0LWtleQ== # base64: your-secure-secret-key
+  api-key-secret: eW91ci1hcGktc2VjcmV0 # base64: your-api-key-secret
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:14
+        env:
+        - name: POSTGRES_USER
+          value: earthsync_user
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-secrets
+              key: postgres-password
+        - name: POSTGRES_DB
+          value: earthsync_db
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7
+        command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-secrets
+              key: redis-password
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - name: redis-storage
+          mountPath: /data
+      volumes:
+      - name: redis-storage
+        persistentVolumeClaim:
+          claimName: redis-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  ports:
+  - port: 6379
+    targetPort: 6379
+  selector:
+    app: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: earthsync-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: earthsync-server
+  template:
+    metadata:
+      labels:
+        app: earthsync-server
+    spec:
+      containers:
+      - name: earthsync-server
+        image: earthsync-server:latest
+        env:
+        - name: DATABASE_URL
+          value: postgres://earthsync_user:$(POSTGRES_PASSWORD)@postgres:5432/earthsync_db
+        - name: REDIS_URL
+          value: redis://:$(REDIS_PASSWORD)@redis:6379
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-secrets
+              key: jwt-secret
+        - name: API_KEY_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-secrets
+              key: api-key-secret
+        - name: PORT
+          value: "3000"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-secrets
+              key: postgres-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: earthsync-secrets
+              key: redis-password
+        ports:
+        - containerPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: earthsync-server
+spec:
+  type: LoadBalancer # Use NodePort or ClusterIP for local clusters
+  ports:
+  - port: 3000
+    targetPort: 3000
+  selector:
+    app: earthsync-server
