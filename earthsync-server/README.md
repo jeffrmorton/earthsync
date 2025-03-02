@@ -1,4 +1,24 @@
-markdownWrapCopy# EarthSync ServerEarthSync is a Node.js-based server designed to deliver real-time Schumann frequency updates through WebSocket connections and provide RESTful API endpoints for user management, frequency logging, and usage tracking. It leverages PostgreSQL for persistent data storage and Redis for efficient WebSocket message broadcasting.## Features- **\*\*User Management\*\***: Secure registration and JWT-based authentication.- **\*\*API Key System\*\***: Generate and use API keys for frequency updates.- **\*\*Real-Time Updates\*\***: Encrypted Schumann frequency broadcasts via WebSocket.- **\*\*Usage Tracking\*\***: Log user activity and retrieve statistics.- **\*\*Deployment Flexibility\*\***: Supports standalone Docker containers or Kubernetes clusters.## Prerequisites- **\*\*Docker\*\***: Required for containerized deployment (tested with Docker 20.10+).- **\*\*Node.js\*\***: Needed for local testing and script execution (v18.19.1 recommended).- **\*\*npm\*\***: Dependency management (bundled with Node.js).- **\*\*curl\*\***: For API testing (install with \`sudo apt install curl\` on Linux/WSL).- **\*\*Kubernetes\*\*** (optional): For Kubernetes deployment (e.g., Minikube, kind, or a managed cluster like GKE/AKS/EKS).- **\*\*kubectl\*\*** (optional): For managing Kubernetes resources (install with \`sudo apt install kubectl\`).- **\*\*Operating System\*\***: Instructions assume a Unix-like environment (Linux/WSL/macOS); adjust for Windows CMD if necessary.## Project Structure
+# EarthSync Server
+
+EarthSync is a Node.js-based server designed to deliver real-time Schumann frequency updates through WebSocket connections and provide RESTful API endpoints for user management, frequency logging, and usage tracking. It leverages PostgreSQL for persistent data storage and Redis for efficient WebSocket message broadcasting.
+
+## Features
+- **User Management**: Secure registration and JWT-based authentication.
+- **API Key System**: Generate and use API keys for frequency updates.
+- **Real-Time Updates**: Encrypted Schumann frequency broadcasts via WebSocket.
+- **Usage Tracking**: Log user activity and retrieve statistics.
+- **Deployment Flexibility**: Supports standalone Docker containers or Kubernetes clusters.
+
+## Prerequisites
+- **Docker**: Required for containerized deployment (tested with Docker 20.10+).
+- **Node.js**: Needed for local testing and script execution (v18.19.1 recommended).
+- **npm**: Dependency management (bundled with Node.js).
+- **curl**: For API testing (install with `sudo apt install curl` on Linux/WSL).
+- **Kubernetes** (optional): For Kubernetes deployment (e.g., Minikube, kind, or a managed cluster like GKE/AKS/EKS).
+- **kubectl** (optional): For managing Kubernetes resources (install with `sudo apt install kubectl`).
+- **Operating System**: Instructions assume a Unix-like environment (Linux/WSL/macOS); adjust for Windows CMD if necessary.
+
+## Project Structure
 
 earthsync-server/├── src/│ ├── db.js # Database schema initialization and operations│ ├── middleware.js # JWT authentication middleware│ ├── server.js # Core server logic│ ├── test-websocket.js # WebSocket testing script├── Dockerfile # Docker image configuration├── package.json # Node.js dependencies and scripts├── .env # Environment variables (example provided)├── test-earthsync-server.sh # Automated test script└── README.md # Project documentation
 
