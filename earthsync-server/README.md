@@ -20,7 +20,17 @@ EarthSync is a Node.js-based server designed to deliver real-time Schumann frequ
 
 ## Project Structure
 
-earthsync-server/ ├── src/ │ ├── db.js # Database schema initialization and operations │ ├── middleware.js # JWT authentication middleware │ ├── server.js # Core server logic │ ├── test-websocket.js # WebSocket testing script ├── Dockerfile # Docker image configuration ├── package.json # Node.js dependencies and scripts ├── .env # Environment variables (example provided) ├── test-earthsync-server.sh # Automated test script └── README.md # Project documentation
+earthsync-server/
+├── src/
+│   ├── db.js              # Database schema initialization and operations
+│   ├── middleware.js      # JWT authentication middleware
+│   ├── server.js          # Core server logic
+│   ├── test-websocket.js  # WebSocket testing script
+├── Dockerfile             # Docker image configuration
+├── package.json           # Node.js dependencies and scripts
+├── .env                   # Environment variables (example provided)
+├── test-earthsync-server.sh # Automated test script
+└── README.md              # Project documentation
 
 ## Setup (Docker)### 1. Clone the RepositoryIf starting from a Git repository:\`\`\`bashgit clone cd earthsync-server
 
