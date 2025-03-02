@@ -14,11 +14,8 @@
     "pg": "^8.11.3",
     "dotenv": "^16.3.1",
     "express-validator": "^7.0.1",
-    "firebase-admin": "^11.10.1",
     "redis": "^4.6.7",
-    "@sentry/node": "^7.63.0",
-    "express-rate-limit": "^6.7.0",
-    "tensorflow": "@tensorflow/tfjs-node"
+    "express-rate-limit": "^6.7.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

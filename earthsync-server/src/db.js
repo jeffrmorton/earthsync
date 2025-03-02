@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const bcrypt = require('bcrypt');
 require('dotenv').config();
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -31,7 +32,6 @@ const initDb = async () => {
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
   `);
-  const bcrypt = require('bcrypt');
   const hashedPassword = await bcrypt.hash('password123', 10);
   await pool.query(`INSERT INTO users (username, password) VALUES ($1, $2) ON CONFLICT DO NOTHING`, ['test', hashedPassword]);
 };
@@ -39,14 +39,14 @@ const initDb = async () => {
 initDb().catch(console.error);
 
 const registerUser = async (username, password) => {
-  const hashedPassword = await require('bcrypt').hash(password, 10);
+  const hashedPassword = await bcrypt.hash(password, 10);
   return pool.query(`INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id`, [username, hashedPassword]);
 };
 
 const loginUser = async (username, password) => {
   const { rows } = await pool.query(`SELECT * FROM users WHERE username = $1`, [username]);
   if (!rows[0]) throw new Error('User not found');
-  const match = await require('bcrypt').compare(password, rows[0].password);
+  const match = await bcrypt.compare(password, rows[0].password);
   if (!match) throw new Error('Invalid password');
   return rows[0];
 };
@@ -61,7 +61,10 @@ const getRecentFrequencies = async (limit = 60) => {
 };
 
 const getHistoricalFrequencies = async (hours) => {
-  const { rows } = await pool.query(`SELECT frequency, timestamp FROM frequency_history WHERE timestamp > NOW() - INTERVAL '${hours} hours' ORDER BY timestamp ASC`);
+  const { rows } = await pool.query(
+    `SELECT frequency, timestamp FROM frequency_history WHERE timestamp > NOW() - $1::interval ORDER BY timestamp ASC`,
+    [`${hours} hours`]
+  );
   return rows;
 };
 
@@ -96,6 +99,15 @@ const verifyApiKey = async (apiKey) => {
 };
 
 module.exports = { 
-  registerUser, loginUser, saveFrequency, getRecentFrequencies, getHistoricalFrequencies, 
-  logUsage, getUserStats, getUsageTrends, getPresetUsage, registerApiKey, verifyApiKey 
+  registerUser, 
+  loginUser, 
+  saveFrequency, 
+  getRecentFrequencies, 
+  getHistoricalFrequencies, 
+  logUsage, 
+  getUserStats, 
+  getUsageTrends, 
+  getPresetUsage, 
+  registerApiKey, 
+  verifyApiKey 
 };

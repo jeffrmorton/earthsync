@@ -49,11 +49,10 @@ Server Deployment
 
 5.  Configure the .env file with your credentials:
 
-    `DATABASE_URL=postgres://user:password@host:5432/earthsync_db JWT_SECRET=your-secure-secret-key\
+    `DATABASE_URL=postgres://user:password@host:5432/earthsync_db\
+    JWT_SECRET=your-secure-secret-key\
     PORT=3000\
-    FIREBASE_SERVICE_ACCOUNT=/path/to/serviceAccount.json\
     REDIS_URL=redis://:your-redis-password@your-redis-host:6379\
-    SENTRY_DSN=https://your-sentry-dsn@sentry.io/your-project-id\
     API_KEY_SECRET=your-api-key-secret`
 
 ### Database Initialization
