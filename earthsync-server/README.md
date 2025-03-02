@@ -20,25 +20,25 @@ EarthSync is a Node.js-based server designed to deliver real-time Schumann frequ
 
 ## Project Structure
 
-earthsync-server/├── src/│ ├── db.js # Database schema initialization and operations│ ├── middleware.js # JWT authentication middleware│ ├── server.js # Core server logic│ ├── test-websocket.js # WebSocket testing script├── Dockerfile # Docker image configuration├── package.json # Node.js dependencies and scripts├── .env # Environment variables (example provided)├── test-earthsync-server.sh # Automated test script└── README.md # Project documentation
+earthsync-server/ ├── src/ │ ├── db.js # Database schema initialization and operations │ ├── middleware.js # JWT authentication middleware │ ├── server.js # Core server logic │ ├── test-websocket.js # WebSocket testing script ├── Dockerfile # Docker image configuration ├── package.json # Node.js dependencies and scripts ├── .env # Environment variables (example provided) ├── test-earthsync-server.sh # Automated test script └── README.md # Project documentation
 
-textWrapCopy## Setup (Docker)### 1. Clone the RepositoryIf starting from a Git repository:\`\`\`bashgit clone cd earthsync-server
+## Setup (Docker)### 1. Clone the RepositoryIf starting from a Git repository:\`\`\`bashgit clone cd earthsync-server
 
 ### 2\. Install Dependencies
 
 Install Node.js dependencies required for building the Docker image:
 
-bashWrapCopynpm install
+npm install
 
 ### 3\. Configure Environment Variables
 
 Create a .env file in the project root:
 
-bashWrapCopynano .env
+nano .env
 
 Add and customize:
 
-textWrapCopyDATABASE\_URL=postgres://earthsync\_user:your\_secure\_password@postgres:5432/earthsync\_dbJWT\_SECRET=your-secure-secret-keyPORT=3000REDIS\_URL=redis://:your\_secure\_redis\_password@redis:6379API\_KEY\_SECRET=your-api-key-secret
+DATABASE\_URL=postgres://earthsync\_user:your\_secure\_password@postgres:5432/earthsync\_dbJWT\_SECRET=your-secure-secret-keyPORT=3000REDIS\_URL=redis://:your\_secure\_redis\_password@redis:6379API\_KEY\_SECRET=your-api-key-secret
 
 *   Replace your\_secure\_password and your\_secure\_redis\_password with strong, unique passwords.
 
@@ -46,7 +46,7 @@ textWrapCopyDATABASE\_URL=postgres://earthsync\_user:your\_secure\_password@post
 
 ### 4\. Build the Server Docker Image
 
-bashWrapCopydocker build -t earthsync-server:latest .
+docker build -t earthsync-server:latest .
 
 Running the Server (Docker)
 
