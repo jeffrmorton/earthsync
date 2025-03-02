@@ -1,0 +1,12 @@
+{
+  "name": "earthsync-detector",
+  "version": "1.0.0",
+  "description": "Posts test Schumann frequencies to EarthSync server",
+  "main": "post_schumann_frequency.js",
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  },
+  "scripts": {
+    "start": "node post_schumann_frequency.js"
+  }
+}
