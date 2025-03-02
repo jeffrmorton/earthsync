@@ -18,22 +18,6 @@ command -v curl >/dev/null 2>&1 || { echo -e "${RED}Error: curl is required but 
 command -v node >/dev/null 2>&1 || { echo -e "${RED}Error: node is required but not installed. Install with 'apt install nodejs' or 'nvm install node'.${NC}"; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo -e "${RED}Error: docker is required but not installed.${NC}"; exit 1; }
 
-# Function to check if a container is running
-check_container() {
-  local container_name=$1
-  if ! docker ps -q -f name="$container_name" | grep -q .; then
-    echo -e "${RED}Error: $container_name container is not running.${NC}"
-    exit 1
-  fi
-}
-
-# Check if required containers are running
-echo "Checking container status..."
-check_container "earthsync-postgres"
-check_container "earthsync-redis"
-check_container "earthsync-server"
-echo -e "${GREEN}All containers are running.${NC}"
-
 # Test 1: Register a new user
 echo "Testing /register endpoint..."
 REGISTER_RESPONSE=$(curl -s -X POST "$SERVER_URL/register" \

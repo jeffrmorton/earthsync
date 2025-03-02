@@ -1,0 +1,3 @@
+docker run -d --name earthsync-postgres -e POSTGRES_USER=earthsync_user -e POSTGRES_PASSWORD=your_secure_password -e POSTGRES_DB=earthsync_db -p 5432:5432 -v earthsync_data:/var/lib/postgresql/data postgres:latest
+docker run -d --name earthsync-redis -e REDIS_PASSWORD=your_secure_redis_password -p 6379:6379 -v earthsync_redis_data:/data redis:latest redis-server --requirepass your_secure_redis_password
+docker run -d --name earthsync-server -p 3000:3000 --link earthsync-redis:redis --link earthsync-postgres:postgres earthsync-server:latest

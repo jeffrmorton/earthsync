@@ -7,37 +7,75 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 pool.on('connect', () => console.log('Connected to PostgreSQL'));
 
 const initDb = async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      username VARCHAR(50) UNIQUE NOT NULL,
-      password VARCHAR(255) NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS frequency_history (
-      id SERIAL PRIMARY KEY,
-      frequency REAL NOT NULL,
-      timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS usage_logs (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id),
-      start_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-      duration INTEGER,
-      preset_mode VARCHAR(50)
-    );
-    CREATE TABLE IF NOT EXISTS api_keys (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id),
-      api_key VARCHAR(255) UNIQUE NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-  const hashedPassword = await bcrypt.hash('password123', 10);
-  await pool.query(`INSERT INTO users (username, password) VALUES ($1, $2) ON CONFLICT DO NOTHING`, ['test', hashedPassword]);
+  try {
+    console.log('Initializing database schema...');
+
+    // Create users table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL
+      );
+    `);
+    console.log('Users table created or already exists');
+
+    // Create frequency_history table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS frequency_history (
+        id SERIAL PRIMARY KEY,
+        frequency REAL NOT NULL,
+        timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('Frequency_history table created or already exists');
+
+    // Create usage_logs table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_logs (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        start_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        duration INTEGER,
+        preset_mode VARCHAR(50)
+      );
+    `);
+    console.log('Usage_logs table created or already exists');
+
+    // Create api_keys table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS api_keys (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        api_key VARCHAR(255) UNIQUE NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('Api_keys table created or already exists');
+
+    // Insert test user
+    const hashedPassword = await bcrypt.hash('password123', 10);
+    await pool.query(`
+      INSERT INTO users (username, password) 
+      VALUES ($1, $2) 
+      ON CONFLICT (username) DO NOTHING
+    `, ['test', hashedPassword]);
+    console.log('Test user inserted or already exists');
+
+    console.log('Database schema initialized successfully');
+  } catch (err) {
+    console.error('Failed to initialize database schema:', err.stack);
+    throw err; // Propagate error to halt execution
+  }
 };
 
-initDb().catch(console.error);
+// Run initDb and exit process on failure
+initDb().catch(err => {
+  console.error('initDb failed:', err.stack);
+  process.exit(1);
+});
 
+// Define database functions
 const registerUser = async (username, password) => {
   const hashedPassword = await bcrypt.hash(password, 10);
   return pool.query(`INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id`, [username, hashedPassword]);
