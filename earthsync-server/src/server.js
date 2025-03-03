@@ -66,12 +66,15 @@ initialize().catch(err => {
   process.exit(1);
 });
 
+// Updated express-rate-limit configuration for v7.x
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 100, // Max 100 requests per window (renamed from 'max')
+  standardHeaders: true, // Return rate limit info in headers
+  legacyHeaders: false // Disable older X-RateLimit headers
 });
 
-// Middleware definition moved before route usage
+// Middleware for API key verification
 const verifyApiKeyMiddleware = async (req, res, next) => {
   const apiKey = req.headers['x-api-key'];
   if (!apiKey) return res.status(401).json({ error: 'API key required' });
@@ -86,11 +89,13 @@ const verifyApiKeyMiddleware = async (req, res, next) => {
   }
 };
 
+// Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Server error:', err);
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
+// User registration endpoint
 app.post('/register', [
   body('username').isLength({ min: 3 }).trim().escape(),
   body('password').isLength({ min: 6 }),
@@ -106,6 +111,7 @@ app.post('/register', [
   }
 });
 
+// User login endpoint
 app.post('/login', [
   body('username').isLength({ min: 3 }).trim().escape(),
   body('password').isLength({ min: 6 }),
@@ -122,6 +128,7 @@ app.post('/login', [
   }
 });
 
+// Get current frequency (authenticated)
 app.get('/schumann-frequency', verifyToken, async (req, res) => {
   try {
     res.json({ frequency: currentFrequency, timestamp: new Date().toISOString(), interval: updateInterval });
@@ -131,6 +138,7 @@ app.get('/schumann-frequency', verifyToken, async (req, res) => {
   }
 });
 
+// Post frequency (API key required)
 app.post('/schumann-frequency', verifyApiKeyMiddleware, [
   body('frequency').isFloat().notEmpty(),
   body('timestamp').optional().isString()
@@ -147,6 +155,7 @@ app.post('/schumann-frequency', verifyApiKeyMiddleware, [
   }
 });
 
+// Set update interval (authenticated)
 app.post('/set-interval', verifyToken, [
   body('interval').isInt({ min: 1000, max: 60000 }),
   body('activity').optional().isIn(['Active', 'Background']),
@@ -162,6 +171,7 @@ app.post('/set-interval', verifyToken, [
   }
 });
 
+// Get frequency history (authenticated)
 app.get('/history/:hours', verifyToken, async (req, res) => {
   try {
     const hours = parseInt(req.params.hours);
@@ -174,6 +184,7 @@ app.get('/history/:hours', verifyToken, async (req, res) => {
   }
 });
 
+// Log usage (authenticated)
 app.post('/log-usage', verifyToken, [
   body('duration').isInt({ min: 0 }),
   body('preset_mode').optional().isString(),
@@ -189,6 +200,7 @@ app.post('/log-usage', verifyToken, [
   }
 });
 
+// Get user stats (authenticated)
 app.get('/stats', verifyToken, async (req, res) => {
   try {
     const stats = await getUserStats(req.user.id);
@@ -199,6 +211,7 @@ app.get('/stats', verifyToken, async (req, res) => {
   }
 });
 
+// Get usage trends (authenticated)
 app.get('/usage-trends', verifyToken, async (req, res) => {
   try {
     const trends = await getUsageTrends(req.user.id);
@@ -209,6 +222,7 @@ app.get('/usage-trends', verifyToken, async (req, res) => {
   }
 });
 
+// Get preset usage (authenticated)
 app.get('/preset-usage', verifyToken, async (req, res) => {
   try {
     const usage = await getPresetUsage(req.user.id);
@@ -219,6 +233,7 @@ app.get('/preset-usage', verifyToken, async (req, res) => {
   }
 });
 
+// Register API key (authenticated)
 app.post('/register-api-key', verifyToken, async (req, res) => {
   try {
     const apiKey = await registerApiKey(req.user.id);
@@ -229,6 +244,7 @@ app.post('/register-api-key', verifyToken, async (req, res) => {
   }
 });
 
+// Key exchange for WebSocket encryption (authenticated)
 app.post('/key-exchange', verifyToken, async (req, res) => {
   try {
     const key = crypto.randomBytes(32);
@@ -240,6 +256,7 @@ app.post('/key-exchange', verifyToken, async (req, res) => {
   }
 });
 
+// Public frequency endpoint (API key required)
 app.get('/public/frequency', apiLimiter, verifyApiKeyMiddleware, async (req, res) => {
   try {
     res.json({ frequency: currentFrequency, timestamp: new Date().toISOString() });
@@ -249,6 +266,7 @@ app.get('/public/frequency', apiLimiter, verifyApiKeyMiddleware, async (req, res
   }
 });
 
+// Public history endpoint (API key required)
 app.get('/public/history/:hours', apiLimiter, verifyApiKeyMiddleware, async (req, res) => {
   try {
     const hours = parseInt(req.params.hours);
@@ -261,6 +279,7 @@ app.get('/public/history/:hours', apiLimiter, verifyApiKeyMiddleware, async (req
   }
 });
 
+// Global stats endpoint (public)
 app.get('/global-stats', async (req, res) => {
   try {
     const activeUsers = await redisClient.zCard('active_users');
@@ -272,7 +291,9 @@ app.get('/global-stats', async (req, res) => {
   }
 });
 
+// WebSocket connection handler
 wss.on('connection', async (ws, req) => {
+  console.log('WebSocket connection attempt:', req.url);
   const token = req.url.split('token=')[1];
   let userId;
   try {
@@ -281,6 +302,7 @@ wss.on('connection', async (ws, req) => {
     userId = decoded.id;
     const key = keyStore.get(userId);
     if (!key) {
+      console.log('No key for user:', userId);
       ws.close(1008, 'No encryption key. Call /key-exchange first.');
       return;
     }
@@ -317,6 +339,7 @@ wss.on('connection', async (ws, req) => {
   ws.on('error', (err) => console.error('WebSocket error:', err));
 });
 
+// Placeholder function to fetch Schumann data
 const fetchSchumannData = async () => {
   try {
     return 7.83 + (Math.random() - 0.5) * 0.4; // Placeholder
@@ -326,6 +349,7 @@ const fetchSchumannData = async () => {
   }
 };
 
+// Broadcast frequency updates
 const broadcastFrequency = async () => {
   try {
     const newFreq = await fetchSchumannData();
@@ -354,6 +378,7 @@ const broadcastFrequency = async () => {
 
 setTimeout(broadcastFrequency, updateInterval);
 
+// Graceful shutdown
 process.on('SIGINT', async () => {
   await redisClient.quit().catch(err => console.error('Redis client quit error:', err));
   await redisSubscriber.quit().catch(err => console.error('Redis subscriber quit error:', err));
