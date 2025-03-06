@@ -42,6 +42,7 @@ EarthSync is a web application that visualizes Schumann Resonance data in 3D usi
 - **Connection issues**: Verify network settings and container names in the Docker network.
 - **Log level not applied**: Check `.env` files for correct `LOG_LEVEL` setting.
 - **Graph height issue**: Ensure browser window is resized; check console logs for height computation.
+- **Historical data error**: Ensure Redis contains valid data; check server logs for errors.
 - View container logs for detailed errors: `docker logs <container_name>`.
 
 ## GitHub Actions

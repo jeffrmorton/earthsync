@@ -167,12 +167,13 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     try {
       const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
       const records = await redisClient.lrange('spectrogram_history', 0, -1);
+      logger.info('Raw records from Redis:', records); // Debug log
       const filteredRecords = records.filter(record => {
         try {
           const parsed = JSON.parse(record);
-          return parsed.timestamp >= cutoff;
+          return parsed.timestamp >= cutoff && Array.isArray(parsed.spectrogram) && parsed.interval;
         } catch (err) {
-          logger.error('Malformed record during filtering', { error: err.message });
+          logger.error('Malformed record during filtering', { error: err.message, record });
           return false;
         }
       });
@@ -183,12 +184,16 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
           if (!Array.isArray(parsed.spectrogram)) throw new Error('Invalid spectrogram');
           return parsed.spectrogram;
         } catch (err) {
-          logger.error('Malformed spectrogram record', { error: err.message });
-          return null;
+          logger.error('Malformed spectrogram record', { error: err.message, record });
+          return [];
         }
-      }).filter(s => s !== null);
+      });
 
-      if (spectrograms.length === 0) return res.status(404).json({ error: 'No historical data' });
+      if (spectrograms.length === 0) {
+        logger.warn('No valid historical data found within the time range');
+        return res.status(200).json([]); // Return empty array instead of 404
+      }
+      logger.info('Processed spectrograms:', spectrograms);
       res.json(spectrograms);
     } catch (err) {
       logger.error('History fetch error', { error: err.message });

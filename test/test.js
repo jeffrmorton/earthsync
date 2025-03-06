@@ -100,12 +100,13 @@ async function cleanupTestUser() {
 
 async function seedHistoricalData() {
   try {
+    await redisClient.del('spectrogram_history'); // Clear existing data
     for (let i = 0; i < 5; i++) {
       const spectrogram = generateSpectrogram();
       const timestamp = new Date(Date.now() - (60 - i * 10) * 60 * 1000).toISOString(); // Data from 60 to 20 minutes ago
       const message = { spectrogram, timestamp, interval: 5000 };
       await redisClient.lpush('spectrogram_history', JSON.stringify(message));
-      logger.info('Seeded historical data', { timestamp });
+      logger.info('Seeded historical data', { timestamp, sample: spectrogram.slice(780, 790) });
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     logger.info('Historical data seeding completed');
@@ -162,8 +163,11 @@ async function runTests() {
 
       logger.info('Testing /history with valid hours...');
       const historyResponse = await axios.get(`${API_BASE_URL}/history/1`, { headers: { Authorization: `Bearer ${token}` } });
-      if (historyResponse.status === 200 && Array.isArray(historyResponse.data)) logger.info('History passed');
-      else throw new Error('History failed');
+      if (historyResponse.status === 200 && Array.isArray(historyResponse.data)) {
+        logger.info('History passed', { dataLength: historyResponse.data.length });
+      } else {
+        throw new Error('History failed');
+      }
 
       logger.info('Testing /history with invalid hours...');
       try {

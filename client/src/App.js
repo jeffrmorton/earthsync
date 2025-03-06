@@ -259,9 +259,11 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
       const response = await axios.get(`${API_BASE_URL}/history/${historicalHours}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const historicalSpectrograms = response.data.map(record => JSON.parse(record.spectrogram));
-      setSpectrogramData(historicalSpectrograms.slice(-timeSteps));
+      console.log('Historical data response:', response.data); // Debug log
+      const historicalSpectrograms = Array.isArray(response.data) ? response.data : [];
+      setSpectrogramData(historicalSpectrograms.slice(-timeSteps).map(s => s || [])); // Handle empty or invalid data
     } catch (err) {
+      console.error('Historical data fetch error:', err);
       setError(`Failed to fetch historical data: ${err.message}`);
     }
   };
