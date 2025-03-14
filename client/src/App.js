@@ -266,17 +266,18 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode }) 
 
     ws.onclose = () => {
       console.log('WebSocket disconnected');
-      const reconnectWithBackoff = (attempt = 1, maxAttempts = 10) => {
-        if (attempt > maxAttempts) {
-          setError('WebSocket connection failed after max retries');
-          return;
+      const reconnectWithBackoff = async (maxAttempts = 10) => {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+          console.log(`Reconnecting in ${delay / 1000}s (attempt ${attempt}/${maxAttempts})...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          try {
+            connectWebSocket();
+            return;
+          } catch (err) {
+            if (attempt === maxAttempts) setError('WebSocket connection failed after max retries');
+          }
         }
-        const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
-        console.log(`Reconnecting in ${delay / 1000}s (attempt ${attempt}/${maxAttempts})...`);
-        setTimeout(() => {
-          connectWebSocket();
-          reconnectWithBackoff(attempt + 1, maxAttempts);
-        }, delay);
       };
       reconnectWithBackoff();
     };
