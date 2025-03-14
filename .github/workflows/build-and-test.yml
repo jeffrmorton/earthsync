@@ -101,12 +101,17 @@ jobs:
 
           describe('EarthSync API Tests', () => {
             let token;
+            let ws;
 
             beforeAll(async () => {
               await redis.ping();
             });
 
             afterAll(async () => {
+              if (ws && ws.readyState !== WebSocket.CLOSED) {
+                await new Promise((resolve) => ws.on('close', resolve));
+                ws.close();
+              }
               await redis.quit();
             });
 
@@ -172,18 +177,17 @@ jobs:
             });
 
             test('WebSocket connection', async () => {
-              const ws = new WebSocket(`${WS_URL}/?token=${token}`);
+              ws = new WebSocket(`${WS_URL}/?token=${token}`);
               await new Promise((resolve) => ws.on('open', resolve));
-              const messagePromise = new Promise((resolve) => ws.on('message', resolve));
+              const messagePromise = new Promise((resolve) => ws.on('message', (data) => resolve(data.toString('utf8'))));
               const spectrogram = generateSpectrogram();
               await redis.publish('spectrogram_updates', JSON.stringify({ spectrogram, timestamp: new Date().toISOString(), interval: 5000 }));
               const message = await messagePromise;
               expect(message).toContain(':');
-              ws.close();
             });
           });
           TEST_EOF
-          npx jest test.js --runInBand
+          npx jest test.js --runInBand --detectOpenHandles
 
       - name: Clean up
         if: always()
