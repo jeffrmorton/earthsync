@@ -109,11 +109,17 @@ jobs:
 
             afterAll(async () => {
               if (ws && ws.readyState !== WebSocket.CLOSED) {
-                await new Promise((resolve) => ws.on('close', resolve));
                 ws.close();
+                await new Promise((resolve) => {
+                  ws.on('close', resolve);
+                  setTimeout(resolve, 2000);
+                });
               }
               await redis.quit();
-            });
+              if (redis.status !== 'end') {
+                redis.disconnect();
+              }
+            }, 10000);
 
             test('Health endpoint', async () => {
               const response = await axios.get(`${API_BASE_URL}/health`);
@@ -184,6 +190,7 @@ jobs:
               await redis.publish('spectrogram_updates', JSON.stringify({ spectrogram, timestamp: new Date().toISOString(), interval: 5000 }));
               const message = await messagePromise;
               expect(message).toContain(':');
+              ws.close();
             });
           });
           TEST_EOF
