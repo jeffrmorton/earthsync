@@ -1,7 +1,7 @@
 # EarthSync Project
 
 ## Overview
-EarthSync is a web application that visualizes Schumann Resonance data in 3D using real-time spectrogram data. It includes a client interface, a server for handling API and WebSocket connections, a detector to generate synthetic data, and a test suite to validate functionality.
+EarthSync is a web application that visualizes Schumann Resonance data in 3D using real-time spectrogram data. It includes a client interface, a server for handling API and WebSocket connections, a detector to generate synthetic data, and monitoring with Prometheus and Grafana.
 
 ## Features
 - Real-time 3D visualization of Schumann Resonance with labeled axes (Frequency, Time, Amplitude).
@@ -9,47 +9,59 @@ EarthSync is a web application that visualizes Schumann Resonance data in 3D usi
 - Historical data retrieval.
 - Adjustable time windows, color scales, and normalization.
 - Configurable log levels via environment variables.
+- Monitoring with Prometheus and Grafana.
+- CI/CD pipeline with GitHub Actions.
 
 ## Prerequisites
 - Docker
-- Docker Compose (optional for manual setup)
-- Node.js 18.x
+- Docker Compose
+- GitHub account for CI/CD
 
 ## Installation
 1. Clone or download the repository.
 2. Navigate to the project directory: `cd earthsync`
 3. Run the setup script: `./setup_earthsync.sh`
-4. Execute the build and run script: `./build_and_run.sh`
+4. Start the application: `docker-compose up --build`
 
 ## Usage
-- Access the application at `http://localhost:3001`.
-- Log in or register with a username and password.
-- Use the interface to switch between real-time and historical data, adjust settings, and toggle themes.
-- Check logs with `docker logs <container_name>` (e.g., `docker logs earthsync-server`).
+- **Client Interface**: Open `http://localhost:3001` in your browser, log in or register with a username and password, and use the interface to switch between real-time and historical data, adjust settings, and toggle themes.
+- **Prometheus Metrics**: Access at `http://localhost:9090` to view raw metrics scraped from the server.
+- **Grafana Dashboard**: Access at `http://localhost:3002` (default login: admin/admin). The pre-configured "EarthSync Server Metrics" dashboard displays:
+- **HTTP Requests Rate**: A graph showing the rate of HTTP requests per second, broken down by method, route, and status.
+- **WebSocket Connections**: A graph showing the number of active WebSocket connections over time.
+- **Logs**: Check service logs with `docker-compose logs <service_name>` (e.g., `docker-compose logs server`).
+
+## Stopping the Application
+- Stop and remove containers: `docker-compose down`
+- Stop and remove containers with volumes (reset data): `docker-compose down -v`
 
 ## Environment Variables
-- Edit `.env` files in `client`, `server`, `detector`, and `test` directories to configure:
-  - `REACT_APP_API_BASE_URL` (client): API endpoint (default: `http://localhost:3000`)
-  - `REACT_APP_WS_URL` (client): WebSocket endpoint (default: `ws://localhost:3000`)
-  - `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`: Redis connection details
-  - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`: PostgreSQL details
-  - `JWT_SECRET`: Secret for JWT authentication
-  - `DETECTOR_INTERVAL`: Interval for detector data generation (ms)
-  - `LOG_LEVEL`: Log level (e.g., `error`, `warn`, `info`, `debug`, default: `info`)
+Edit `.env` files in `client`, `server`, and `detector` directories to configure:
+- `REACT_APP_API_BASE_URL` (client): API endpoint (default: `http://localhost:3000`)
+- `REACT_APP_WS_URL` (client): WebSocket endpoint (default: `ws://localhost:3000`)
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`: Redis connection details
+- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`: PostgreSQL details
+- `JWT_SECRET`: Secret for JWT authentication (set in `docker-compose.yml`)
+- `DETECTOR_INTERVAL`: Interval for detector data generation (ms)
+- `LOG_LEVEL`: Log level (e.g., `error`, `warn`, `info`, `debug`, default: `info`)
+
+## Monitoring
+- **Prometheus**: Scrapes metrics from `http://earthsync-server:3000/metrics`, including HTTP requests and WebSocket connections.
+- **Grafana**: Visualize metrics by setting up dashboards with Prometheus as the data source.
 
 ## Troubleshooting
-- **Build fails**: Ensure Docker is running and all dependencies are installed.
-- **Connection issues**: Verify network settings and container names in the Docker network.
-- **Log level not applied**: Check `.env` files for correct `LOG_LEVEL` setting.
-- **Graph height issue**: Ensure browser window is resized; check console logs for height computation.
-- **Historical data error**: Ensure Redis contains valid data; check server logs for errors.
-- View container logs for detailed errors: `docker logs <container_name>`.
+- **Build fails**: Ensure Docker and Docker Compose are installed and running.
+- **Connection issues**: Verify ports (3000, 3001, 6379, 5432, 9090, 3002) are free and `.env` settings match.
+- **Log level not applied**: Check `.env` files for correct `LOG_LEVEL`.
+- **Graph height issue**: Resize browser window; check console logs for height computation.
+- **Historical data error**: Ensure Redis contains valid data; check server logs.
+- View logs: `docker-compose logs <service_name>`.
 
-## GitHub Actions
-This repository includes a GitHub Actions workflow (`build-and-test.yml`) that:
-- Builds all Docker images on push or pull request to the `main` branch.
-- Runs the test suite and checks for successful completion.
-- Cleans up resources after execution.
+## CI/CD with GitHub Actions
+The repository includes a GitHub Actions workflow (`build-and-test.yml`) that:
+- Builds all Docker images on push or pull request to `main`.
+- Runs tests for API endpoints (health, register, login, key exchange, history) and WebSocket connectivity.
+- Cleans up resources afterward.
 
 ## License
 MIT License (see LICENSE file for details).

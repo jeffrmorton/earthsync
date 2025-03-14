@@ -27,8 +27,10 @@ const dbConfig = {
   connectionTimeoutMillis: 2000,
 };
 
+logger.info('Database configuration', { dbConfig });
+
 if (!dbConfig.user || !dbConfig.host || !dbConfig.database || !dbConfig.password || !dbConfig.port) {
-  logger.error('Database configuration missing');
+  logger.error('Database configuration missing', { dbConfig });
   process.exit(1);
 }
 

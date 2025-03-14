@@ -21,9 +21,10 @@ const logger = winston.createLogger({
 const redisHost = process.env.REDIS_HOST;
 const redisPort = parseInt(process.env.REDIS_PORT, 10);
 const redisPassword = process.env.REDIS_PASSWORD;
-const INTERVAL = parseInt(process.env.DETECTOR_INTERVAL, 10);
+const INTERVAL = parseInt(process.env.DETECTOR_INTERVAL, 10) || 5000;
+const DETECTOR_BATCH_SIZE = 2;
 
-if (!redisHost || !redisPort || !redisPassword || !INTERVAL) {
+if (!redisHost || !redisPort || !redisPassword) {
   logger.error('Configuration missing');
   process.exit(1);
 }
@@ -32,7 +33,7 @@ const redisClient = new Redis({
   host: redisHost,
   port: redisPort,
   password: redisPassword,
-  retryStrategy: (times) => Math.min(times * 50, 2000)
+  retryStrategy: (times) => Math.min(times * 50, 10000),
 });
 
 const FREQUENCY_RANGE = 5501;
@@ -58,22 +59,30 @@ function generateSpectrogram() {
   return spectrogram;
 }
 
-async function publishSpectrogram() {
-  try {
-    const spectrogram = generateSpectrogram();
-    const message = { spectrogram, timestamp: new Date().toISOString(), interval: INTERVAL };
-    await redisClient.publish('spectrogram_updates', JSON.stringify(message));
-    logger.info('Spectrogram published', { timestamp: message.timestamp });
-  } catch (err) {
-    logger.error('Publish failed', { error: err.message });
+async function publishSpectrogramBatch() {
+  const batch = [];
+  for (let i = 0; i < DETECTOR_BATCH_SIZE; i++) {
+    batch.push(generateSpectrogram());
   }
+  const message = { spectrogram: batch, timestamp: new Date().toISOString(), interval: INTERVAL };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await redisClient.publish('spectrogram_updates', JSON.stringify(message));
+      logger.info('Spectrogram batch published', { timestamp: message.timestamp, count: batch.length });
+      return;
+    } catch (err) {
+      logger.error(`Publish attempt ${attempt} failed`, { error: err.message });
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+  logger.error('Max retries reached, giving up');
 }
 
 async function startDetector() {
   try {
     await redisClient.ping();
     logger.info('Connected to Redis');
-    setInterval(publishSpectrogram, INTERVAL);
+    setInterval(publishSpectrogramBatch, INTERVAL * DETECTOR_BATCH_SIZE);
   } catch (err) {
     logger.error('Detector start failed', { error: err.message });
     process.exit(1);

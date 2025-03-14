@@ -1,0 +1,144 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:6
+    command: redis-server --requirepass password
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    networks:
+      - earthsync-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "password", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: earthsync
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - earthsync-network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "user", "-d", "earthsync"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    restart: unless-stopped
+
+  server:
+    build: ./server
+    ports:
+      - "3000:3000"
+    environment:
+      - JWT_SECRET=1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
+    env_file:
+      - ./server/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - earthsync-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    restart: unless-stopped
+
+  detector:
+    build: ./detector
+    env_file:
+      - ./detector/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - earthsync-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+
+  client:
+    build: ./client
+    ports:
+      - "3001:80"
+    env_file:
+      - ./client/.env
+    depends_on:
+      - server
+    networks:
+      - earthsync-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - earthsync-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3002:3000"
+    volumes:
+      - ./grafana-dashboard.json:/var/lib/grafana/dashboards/earthsync-dashboard.json
+    networks:
+      - earthsync-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+
+networks:
+  earthsync-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:

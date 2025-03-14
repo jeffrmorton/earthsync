@@ -2,11 +2,12 @@
  * Main application component for EarthSync client.
  * Handles authentication, theme toggling, and renders the SpectrogramPage.
  */
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import axios from 'axios';
 import CryptoJS from 'crypto-js';
 import { AES, enc, mode, pad } from 'crypto-js';
 import Plotly from 'react-plotly.js';
+import throttle from 'lodash.throttle';
 import {
   AppBar, Toolbar, Typography, Drawer, List, ListItem, ListItemIcon, ListItemText,
   IconButton, CssBaseline, Box, Slider, FormControl, FormLabel, Switch, useTheme,
@@ -34,6 +35,7 @@ function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [error, setError] = useState(null);
   const [darkMode, setDarkMode] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
 
   const theme = createTheme({
     palette: {
@@ -49,6 +51,7 @@ function App() {
 
   const handleRegister = async (e) => {
     e.preventDefault();
+    setIsLoading(true);
     try {
       const response = await axios.post(`${API_BASE_URL}/register`, { username, password });
       console.log('Registration successful:', response.data);
@@ -57,11 +60,14 @@ function App() {
     } catch (err) {
       console.error('Registration failed:', err);
       setError(`Failed to register: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    setIsLoading(true);
     try {
       const response = await axios.post(`${API_BASE_URL}/login`, { username, password });
       console.log('Login successful:', response.data);
@@ -72,6 +78,8 @@ function App() {
     } catch (err) {
       console.error('Login failed:', err);
       setError(`Failed to log in: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -96,6 +104,7 @@ function App() {
         <Typography variant="h4" gutterBottom>
           {isRegistering ? 'Register' : 'Login'}
         </Typography>
+        {isLoading && <Typography>Loading...</Typography>}
         {error && <Typography color="error">{error}</Typography>}
         <form onSubmit={isRegistering ? handleRegister : handleLogin}>
           <Box sx={{ mb: 2 }}>
@@ -119,13 +128,14 @@ function App() {
             />
           </Box>
           <Box sx={{ display: 'flex', gap: 2 }}>
-            <button type="submit" style={{ padding: '10px 20px', borderRadius: '4px' }}>
+            <button type="submit" style={{ padding: '10px 20px', borderRadius: '4px' }} disabled={isLoading}>
               {isRegistering ? 'Register' : 'Login'}
             </button>
             <button
               type="button"
               onClick={() => setIsRegistering(!isRegistering)}
               style={{ padding: '10px 20px', borderRadius: '4px' }}
+              disabled={isLoading}
             >
               {isRegistering ? 'Switch to Login' : 'Switch to Register'}
             </button>
@@ -136,14 +146,7 @@ function App() {
   );
 }
 
-/**
- * Component to display the spectrogram data in 3D.
- * @param {string} token - Authentication token for API requests
- * @param {function} onLogout - Callback to handle logout
- * @param {boolean} darkMode - Current theme mode
- * @param {function} setDarkMode - Function to toggle dark mode
- */
-function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
+const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode }) => {
   const [spectrogramData, setSpectrogramData] = useState([]);
   const [encryptionKey, setEncryptionKey] = useState(null);
   const [error, setError] = useState(null);
@@ -156,6 +159,7 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
     const saved = localStorage.getItem('drawerOpen');
     return saved ? JSON.parse(saved) : true;
   });
+  const [isLoading, setIsLoading] = useState(false);
   const wsRef = useRef(null);
   const theme = useTheme();
 
@@ -166,8 +170,31 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
   const drawerWidth = 240;
   const appBarHeight = 64;
 
+  const updateSpectrogram = useMemo(() => throttle((newData) => {
+    if (!Array.isArray(newData)) {
+      console.error('Invalid spectrogram data received: not an array', newData);
+      setError('Received invalid spectrogram data');
+      return;
+    }
+    // Handle batched spectrograms (array of arrays)
+    const validSpectrograms = newData.filter(subArray => 
+      Array.isArray(subArray) && subArray.length > 0 && subArray.every(v => typeof v === 'number' && !isNaN(v))
+    );
+    if (validSpectrograms.length === 0) {
+      console.error('No valid spectrograms in batch:', newData);
+      setError('Received invalid spectrogram batch');
+      return;
+    }
+    setSpectrogramData((prev) => {
+      const newDataFlat = [...prev, ...validSpectrograms].slice(-timeSteps);
+      console.log('Updated spectrogramData length:', newDataFlat.length);
+      return newDataFlat;
+    });
+  }, 500), [timeSteps]);
+
   useEffect(() => {
     const fetchKey = async () => {
+      setIsLoading(true);
       try {
         const response = await axios.post(
           `${API_BASE_URL}/key-exchange`,
@@ -179,6 +206,8 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
       } catch (err) {
         console.error('Key exchange failed:', err);
         setError(`Failed to fetch encryption key: ${err.response?.data?.error || err.message}`);
+      } finally {
+        setIsLoading(false);
       }
     };
     if (token) fetchKey();
@@ -216,15 +245,14 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
         if (!messageStrDecrypted) throw new Error('Decryption failed');
 
         const message = JSON.parse(messageStrDecrypted);
-        if (!message.spectrogram || !Array.isArray(message.spectrogram)) throw new Error('Invalid spectrogram data');
+        if (!message.spectrogram) throw new Error('Invalid spectrogram data');
 
-        console.log('Decrypted message sample (around 7.83 Hz):', message.spectrogram.slice(780, 790));
-        setSpectrogramData((prev) => {
-          const newData = [...prev, message.spectrogram].slice(-timeSteps);
-          console.log('Spectrogram data length:', newData.length);
-          console.log('Latest sample (around 7.83 Hz):', newData[newData.length - 1]?.slice(780, 790));
-          return newData;
-        });
+        console.log('Decrypted message sample (around 7.83 Hz):', 
+          Array.isArray(message.spectrogram[0]) 
+            ? message.spectrogram.map(s => s.slice(780, 790)) 
+            : message.spectrogram.slice(780, 790)
+        );
+        updateSpectrogram(message.spectrogram);
       } catch (err) {
         console.error('WebSocket decryption error:', err);
         setError(`Failed to process WebSocket message: ${err.message}`);
@@ -237,11 +265,18 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
     };
 
     ws.onclose = () => {
-      console.log('WebSocket disconnected, attempting to reconnect...');
-      const reconnectWithBackoff = (attempt = 1) => {
+      console.log('WebSocket disconnected');
+      const reconnectWithBackoff = (attempt = 1, maxAttempts = 10) => {
+        if (attempt > maxAttempts) {
+          setError('WebSocket connection failed after max retries');
+          return;
+        }
         const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
-        console.log(`Reconnecting in ${delay / 1000}s (attempt ${attempt})...`);
-        setTimeout(() => reconnectWithBackoff(attempt + 1), delay);
+        console.log(`Reconnecting in ${delay / 1000}s (attempt ${attempt}/${maxAttempts})...`);
+        setTimeout(() => {
+          connectWebSocket();
+          reconnectWithBackoff(attempt + 1, maxAttempts);
+        }, delay);
       };
       reconnectWithBackoff();
     };
@@ -255,16 +290,25 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
   };
 
   const fetchHistoricalData = async () => {
+    setIsLoading(true);
     try {
       const response = await axios.get(`${API_BASE_URL}/history/${historicalHours}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      console.log('Historical data response:', response.data); // Debug log
-      const historicalSpectrograms = Array.isArray(response.data) ? response.data : [];
-      setSpectrogramData(historicalSpectrograms.slice(-timeSteps).map(s => s || [])); // Handle empty or invalid data
+      console.log('Historical data response:', response.data);
+      const historicalSpectrograms = Array.isArray(response.data)
+        ? response.data.filter(s => Array.isArray(s) && s.every(v => typeof v === 'number' && !isNaN(v)))
+        : [];
+      if (historicalSpectrograms.length === 0) {
+        console.warn('No valid historical spectrograms found');
+        setError('No valid historical data available');
+      }
+      setSpectrogramData(historicalSpectrograms.slice(-timeSteps));
     } catch (err) {
       console.error('Historical data fetch error:', err);
       setError(`Failed to fetch historical data: ${err.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -278,46 +322,55 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
   }, [historicalMode, historicalHours, token, encryptionKey, timeSteps]);
 
   const downsampleFactor = 5;
-  const xLabels = Array(5501).fill(0)
+  const xLabels = useMemo(() => Array(5501).fill(0)
     .map((_, i) => (i / 100).toFixed(2))
-    .filter((_, i) => i % downsampleFactor === 0);
-  const zData = spectrogramData.map(data => data.filter((_, i) => i % downsampleFactor === 0));
+    .filter((_, i) => i % downsampleFactor === 0), []);
+  const zData = useMemo(() => spectrogramData
+    .filter(data => Array.isArray(data) && data.length > 0 && data.every(v => typeof v === 'number' && !isNaN(v)))
+    .map(data => data.filter((_, i) => i % downsampleFactor === 0)), [spectrogramData]);
   console.log('Z data (first few rows, around 7.83 Hz):', zData.map(row => row.slice(156, 162)));
 
-  const yLabels = spectrogramData.map((_, i) => {
-    const secondsAgo = (spectrogramData.length - 1 - i) * 5;
+  const yLabels = useMemo(() => zData.map((_, i) => {
+    const secondsAgo = (zData.length - 1 - i) * 5;
     return secondsAgo === 0 ? 'Now' : `-${secondsAgo}s`;
-  });
+  }), [zData]);
 
   const normalizeData = (data) => {
     const allValues = data.flat();
+    if (allValues.length === 0 || allValues.some(v => typeof v !== 'number' || isNaN(v))) {
+      console.error('Invalid data for normalization:', allValues);
+      return data;
+    }
     const min = Math.min(...allValues);
     const max = Math.max(...allValues);
     const range = max - min;
     return data.map(row => row.map(value => range > 0 ? ((value - min) / range) * 15 : 0));
   };
 
-  const displayData = normalize ? normalizeData(zData) : zData;
-  const getMinMaxAmplitude = () => {
+  const displayData = useMemo(() => normalize ? normalizeData(zData) : zData, [normalize, zData]);
+  const { minAmplitude, maxAmplitude } = useMemo(() => {
     if (displayData.length === 0) return { min: 0, max: 15 };
     const allValues = displayData.flat();
+    if (allValues.length === 0 || allValues.some(v => typeof v !== 'number' || isNaN(v))) {
+      console.error('Invalid display data:', allValues);
+      return { min: 0, max: 15 };
+    }
     const min = Math.min(...allValues);
     const max = Math.max(...allValues);
     return { min: Math.max(0, min), max: Math.min(15, max + 1) };
-  };
-  const { min: minAmplitude, max: maxAmplitude } = getMinMaxAmplitude();
+  }, [displayData]);
 
-  const plotData = [{
-    z: displayData,
+  const plotData = useMemo(() => [{
+    z: displayData.length > 0 ? displayData : [[0]],
     x: xLabels,
-    y: yLabels,
+    y: yLabels.length > 0 ? yLabels : ['Now'],
     type: 'surface',
     colorscale: colorScale === 'Jet' ? 'Jet' : 'Greys',
     showscale: true,
     colorbar: { title: 'Amplitude', titleside: 'right' },
-  }];
+  }], [displayData, xLabels, yLabels, colorScale]);
 
-  const layout = {
+  const layout = useMemo(() => ({
     title: {
       text: 'Schumann Resonance 3D Surface Plot',
       font: { size: 18, color: darkMode ? '#ffffff' : '#000000' },
@@ -328,28 +381,19 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
     },
     scene: {
       xaxis: {
-        title: {
-          text: 'Frequency (Hz)',
-          font: { size: 14, color: darkMode ? '#ffffff' : '#000000' },
-        },
+        title: { text: 'Frequency (Hz)', font: { size: 14, color: darkMode ? '#ffffff' : '#000000' } },
         tickfont: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
         gridcolor: darkMode ? '#444444' : '#d3d3d3',
         zerolinecolor: darkMode ? '#ffffff' : '#000000',
       },
       yaxis: {
-        title: {
-          text: 'Time (seconds)',
-          font: { size: 14, color: darkMode ? '#ffffff' : '#000000' },
-        },
+        title: { text: 'Time (seconds)', font: { size: 14, color: darkMode ? '#ffffff' : '#000000' } },
         tickfont: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
         gridcolor: darkMode ? '#444444' : '#d3d3d3',
         zerolinecolor: darkMode ? '#ffffff' : '#000000',
       },
       zaxis: {
-        title: {
-          text: 'Amplitude',
-          font: { size: 14, color: darkMode ? '#ffffff' : '#000000' },
-        },
+        title: { text: 'Amplitude', font: { size: 14, color: darkMode ? '#ffffff' : '#000000' } },
         tickfont: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
         range: [minAmplitude, maxAmplitude],
         gridcolor: darkMode ? '#444444' : '#d3d3d3',
@@ -362,11 +406,7 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
     paper_bgcolor: darkMode ? '#1a1a1a' : '#ffffff',
     plot_bgcolor: darkMode ? '#1a1a1a' : '#ffffff',
     modebar: { orientation: 'h', y: 0, yanchor: 'top', x: 1, xanchor: 'right' },
-  };
-
-  // Debug log to verify layout
-  console.log('Plotly layout:', JSON.stringify(layout, null, 2));
-  console.log('Computed main Box height:', `calc(100vh - ${appBarHeight}px)`);
+  }), [darkMode, minAmplitude, maxAmplitude, appBarHeight]);
 
   return (
     <>
@@ -466,7 +506,7 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
             pl: 2,
             pr: 2,
             width: drawerOpen ? `calc(100% - ${drawerWidth}px)` : '100%',
-            height: `calc(100vh - ${appBarHeight}px)`, // Ensure height is correctly calculated
+            height: `calc(100vh - ${appBarHeight}px)`,
             display: 'flex',
             flexDirection: 'column',
             transition: theme.transitions.create('width', {
@@ -475,6 +515,7 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
             }),
           }}
         >
+          {isLoading && <Typography>Loading...</Typography>}
           {error && <Typography color="error">{error}</Typography>}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
             Connected to server at: {API_BASE_URL}
@@ -483,15 +524,17 @@ function SpectrogramPage({ token, onLogout, darkMode, setDarkMode }) {
             <Plotly
               data={plotData}
               layout={layout}
-              style={{ width: '100%', height: '100%' }} // Explicitly set height and width
+              revision={spectrogramData.length}
+              style={{ width: '100%', height: '100%' }}
               useResizeHandler
-              key={`plot-${darkMode}-${timeSteps}-${historicalMode}-${colorScale}-${normalize}`} // Force re-render on state changes
             />
           </Box>
         </Box>
       </Box>
     </>
   );
-}
+});
+
+SpectrogramPage.displayName = 'SpectrogramPage';
 
 export default App;

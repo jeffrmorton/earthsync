@@ -8,11 +8,31 @@ const Redis = require('ioredis');
 const winston = require('winston');
 const crypto = require('crypto');
 const cors = require('cors');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
 const { query, end } = require('./db.js');
 const { authenticateToken } = require('./middleware.js');
 const WebSocket = require('ws');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const promClient = require('prom-client');
+
+// Prometheus metrics setup
+const register = new promClient.Registry();
+promClient.collectDefaultMetrics({ register });
+
+const httpRequestCounter = new promClient.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'route', 'status'],
+  registers: [register],
+});
+
+const websocketConnections = new promClient.Gauge({
+  name: 'websocket_connections_active',
+  help: 'Number of active WebSocket connections',
+  registers: [register],
+});
 
 const logLevel = process.env.LOG_LEVEL || 'info';
 const logger = winston.createLogger({
@@ -60,15 +80,11 @@ const redisClient = new Redis({
   host: redisHost,
   port: redisPort,
   password: redisPassword,
-  retryStrategy: (times) => (times > 10 ? null : Math.min(times * 50, 2000))
+  retryStrategy: (times) => Math.min(times * 50, 10000),
 });
 
-const redisSubscriberOptions = {
-  host: redisHost,
-  port: redisPort,
-  password: redisPassword,
-  retryStrategy: (times) => (times > 10 ? null : Math.min(times * 50, 2000))
-};
+const redisPublisher = redisClient;
+const redisSubscriber = redisClient.duplicate();
 
 async function waitForRedis(client, clientName) {
   return new Promise((resolve, reject) => {
@@ -94,9 +110,21 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
 
   app.use(cors({
     origin: 'http://localhost:3001',
-    methods: ['GET', 'POST', 'DELETE'], // Added DELETE for user cleanup
+    methods: ['GET', 'POST', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
   }));
+
+  app.use(compression());
+  app.use(express.json());
+
+  app.use((req, res, next) => {
+    const originalEnd = res.end;
+    res.end = function (...args) {
+      httpRequestCounter.inc({ method: req.method, route: req.path, status: res.statusCode });
+      originalEnd.apply(res, args);
+    };
+    next();
+  });
 
   app.use((err, req, res, next) => {
     if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
@@ -106,11 +134,23 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     next();
   });
 
-  app.use(express.json());
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+  });
 
-  app.get('/health', (req, res) => res.status(200).json({ status: 'OK', uptime: process.uptime() }));
+  app.get('/health', async (req, res) => {
+    try {
+      await redisClient.ping();
+      await query('SELECT 1');
+      res.status(200).json({ status: 'OK', uptime: process.uptime(), redis: 'OK', postgres: 'OK' });
+    } catch (err) {
+      logger.error('Health check failed', { error: err.message });
+      res.status(500).json({ status: 'ERROR', error: err.message });
+    }
+  });
 
-  app.post('/register', async (req, res) => {
+  app.post('/register', limiter, async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
 
@@ -128,7 +168,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     }
   });
 
-  app.post('/login', async (req, res) => {
+  app.post('/login', limiter, async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Credentials required' });
 
@@ -167,7 +207,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     try {
       const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
       const records = await redisClient.lrange('spectrogram_history', 0, -1);
-      logger.info('Raw records from Redis:', records); // Debug log
+      logger.info('Raw records from Redis:', records);
       const filteredRecords = records.filter(record => {
         try {
           const parsed = JSON.parse(record);
@@ -191,7 +231,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
 
       if (spectrograms.length === 0) {
         logger.warn('No valid historical data found within the time range');
-        return res.status(200).json([]); // Return empty array instead of 404
+        return res.status(200).json([]);
       }
       logger.info('Processed spectrograms:', spectrograms);
       res.json(spectrograms);
@@ -201,7 +241,6 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     }
   });
 
-  // New DELETE endpoint for user cleanup
   app.delete('/users/:username', authenticateToken, async (req, res) => {
     try {
       const { username } = req.params;
@@ -214,6 +253,16 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     } catch (err) {
       logger.error('User deletion error', { error: err.message });
       res.status(500).json({ error: 'Deletion failed' });
+    }
+  });
+
+  app.get('/metrics', async (req, res) => {
+    try {
+      res.set('Content-Type', register.contentType);
+      res.end(await register.metrics());
+    } catch (err) {
+      logger.error('Metrics endpoint error', { error: err.message });
+      res.status(500).end(err.message);
     }
   });
 
@@ -231,50 +280,41 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
       const user = jwt.verify(token, JWT_SECRET);
       ws.user = user;
       logger.info('WebSocket client connected', { username: user.username });
-
-      const redisSubscriber = new Redis(redisSubscriberOptions);
-      redisSubscriber.subscribe('spectrogram_updates', (err) => {
-        if (err) {
-          logger.error('Subscription error', { error: err.message });
-          ws.close(1011, 'Internal error');
-        }
-      });
-
-      redisSubscriber.on('message', async (channel, message) => {
-        try {
-          const parsedMessage = JSON.parse(message);
-          if (!parsedMessage.spectrogram || !parsedMessage.timestamp || !parsedMessage.interval) {
-            throw new Error('Missing message fields');
-          }
-
-          await redisClient.lpush('spectrogram_history', JSON.stringify(parsedMessage));
-          await redisClient.ltrim('spectrogram_history', 0, 999);
-
-          const key = userKeys.get(ws.user.username);
-          if (!key) {
-            logger.warn('No encryption key, skipping message', { username: ws.user.username });
-            return;
-          }
-          const encryptedMessage = encryptMessage(message, key);
-          if (ws.readyState === WebSocket.OPEN) ws.send(encryptedMessage);
-        } catch (err) {
-          logger.error('Message processing error', { error: err.message });
-        }
-      });
-
+      websocketConnections.inc();
       ws.on('close', () => {
-        redisSubscriber.unsubscribe('spectrogram_updates', (err) => {
-          if (err) logger.error('Unsubscribe error', { error: err.message });
-        });
-        redisSubscriber.quit();
-        userKeys.delete(ws.user.username);
-        logger.info('WebSocket client disconnected', { username: ws.user.username });
+        websocketConnections.dec();
+        logger.info('WebSocket client disconnected', { username: user.username });
       });
-
       ws.on('error', (err) => logger.error('WebSocket error', { error: err.message }));
     } catch (err) {
       logger.error('Connection handler error', { error: err.message });
       ws.close(1011, 'Internal error');
+    }
+  });
+
+  redisSubscriber.subscribe('spectrogram_updates', (err) => {
+    if (err) logger.error('Subscription error', { error: err.message });
+  });
+
+  redisSubscriber.on('message', async (channel, message) => {
+    try {
+      const parsedMessage = JSON.parse(message);
+      if (!parsedMessage.spectrogram || !parsedMessage.timestamp || !parsedMessage.interval) {
+        throw new Error('Missing message fields');
+      }
+
+      await redisClient.lpush('spectrogram_history', JSON.stringify(parsedMessage));
+      await redisClient.ltrim('spectrogram_history', 0, 999);
+
+      wss.clients.forEach((ws) => {
+        if (ws.readyState === WebSocket.OPEN && userKeys.has(ws.user.username)) {
+          const key = userKeys.get(ws.user.username);
+          const encryptedMessage = encryptMessage(message, key);
+          ws.send(encryptedMessage);
+        }
+      });
+    } catch (err) {
+      logger.error('Message processing error', { error: err.message });
     }
   });
 
@@ -303,8 +343,10 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
 
   process.on('SIGINT', async () => {
     logger.info('Shutting down server...');
+    wss.clients.forEach((ws) => ws.close(1000, 'Server shutting down'));
     try {
       await redisClient.quit();
+      await redisSubscriber.quit();
       await end();
       server.close(() => {
         logger.info('Server shut down');
