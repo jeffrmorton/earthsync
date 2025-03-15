@@ -18,13 +18,24 @@ import {
   BarChart as BarChartIcon, Logout as LogoutIcon, History as HistoryIcon,
 } from '@mui/icons-material';
 
-// Load environment variables
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
-const WS_URL = process.env.REACT_APP_WS_URL;
+// Load environment variables as defaults
+const DEFAULT_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://server:3000';
+const DEFAULT_WS_URL = process.env.REACT_APP_WS_URL || 'ws://server:3000';
 
-if (!API_BASE_URL || !WS_URL) {
-  console.error('API_BASE_URL or WS_URL is not defined in environment variables');
-  throw new Error('Missing required environment variables');
+// Function to determine the working API and WS URLs with localhost fallback
+async function determineServerUrls(defaultApiUrl, defaultWsUrl) {
+  const fallbackApiUrl = 'http://localhost:3000';
+  const fallbackWsUrl = 'ws://localhost:3000';
+
+  // Test if the default API URL is reachable
+  try {
+    await axios.get(`${defaultApiUrl}/health`, { timeout: 2000 });
+    console.log(`Using default server URLs: API=${defaultApiUrl}, WS=${defaultWsUrl}`);
+    return { apiUrl: defaultApiUrl, wsUrl: defaultWsUrl };
+  } catch (err) {
+    console.warn(`Default server URL (${defaultApiUrl}) not reachable: ${err.message}. Falling back to localhost.`);
+    return { apiUrl: fallbackApiUrl, wsUrl: fallbackWsUrl };
+  }
 }
 
 function App() {
@@ -36,6 +47,7 @@ function App() {
   const [error, setError] = useState(null);
   const [darkMode, setDarkMode] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [serverUrls, setServerUrls] = useState(null);
 
   const theme = createTheme({
     palette: {
@@ -46,14 +58,23 @@ function App() {
   });
 
   useEffect(() => {
+    async function initializeServerUrls() {
+      const urls = await determineServerUrls(DEFAULT_API_BASE_URL, DEFAULT_WS_URL);
+      setServerUrls(urls);
+    }
+    initializeServerUrls();
+  }, []);
+
+  useEffect(() => {
     if (token) setIsAuthenticated(true);
   }, [token]);
 
   const handleRegister = async (e) => {
     e.preventDefault();
+    if (!serverUrls) return;
     setIsLoading(true);
     try {
-      const response = await axios.post(`${API_BASE_URL}/register`, { username, password });
+      const response = await axios.post(`${serverUrls.apiUrl}/register`, { username, password });
       console.log('Registration successful:', response.data);
       setError(null);
       setIsRegistering(false);
@@ -67,9 +88,10 @@ function App() {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    if (!serverUrls) return;
     setIsLoading(true);
     try {
-      const response = await axios.post(`${API_BASE_URL}/login`, { username, password });
+      const response = await axios.post(`${serverUrls.apiUrl}/login`, { username, password });
       console.log('Login successful:', response.data);
       localStorage.setItem('token', response.data.token);
       setToken(response.data.token);
@@ -89,10 +111,28 @@ function App() {
     setIsAuthenticated(false);
   };
 
+  if (!serverUrls) {
+    return (
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <Box sx={{ padding: 3, textAlign: 'center' }}>
+          <Typography variant="h6">Initializing server connection...</Typography>
+        </Box>
+      </ThemeProvider>
+    );
+  }
+
   if (isAuthenticated) {
     return (
       <ThemeProvider theme={theme}>
-        <SpectrogramPage token={token} onLogout={handleLogout} darkMode={darkMode} setDarkMode={setDarkMode} />
+        <SpectrogramPage
+          token={token}
+          onLogout={handleLogout}
+          darkMode={darkMode}
+          setDarkMode={setDarkMode}
+          apiUrl={serverUrls.apiUrl}
+          wsUrl={serverUrls.wsUrl}
+        />
       </ThemeProvider>
     );
   }
@@ -146,7 +186,7 @@ function App() {
   );
 }
 
-const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode }) => {
+const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, apiUrl, wsUrl }) => {
   const [spectrogramData, setSpectrogramData] = useState([]);
   const [encryptionKey, setEncryptionKey] = useState(null);
   const [error, setError] = useState(null);
@@ -197,7 +237,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode }) 
       setIsLoading(true);
       try {
         const response = await axios.post(
-          `${API_BASE_URL}/key-exchange`,
+          `${apiUrl}/key-exchange`,
           {},
           { headers: { Authorization: `Bearer ${token}` } }
         );
@@ -211,7 +251,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode }) 
       }
     };
     if (token) fetchKey();
-  }, [token]);
+  }, [token, apiUrl]);
 
   const connectWebSocket = () => {
     if (!token || !encryptionKey) {
@@ -219,10 +259,10 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode }) 
       return;
     }
 
-    const ws = new WebSocket(`${WS_URL}/?token=${token}`);
+    const ws = new WebSocket(`${wsUrl}/?token=${token}`);
     wsRef.current = ws;
 
-    console.log('Attempting WebSocket connection to:', WS_URL);
+    console.log('Attempting WebSocket connection to:', wsUrl);
     console.log('Encryption key (hex):', encryptionKey);
 
     ws.onopen = () => console.log('WebSocket connected');
@@ -293,7 +333,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode }) 
   const fetchHistoricalData = async () => {
     setIsLoading(true);
     try {
-      const response = await axios.get(`${API_BASE_URL}/history/${historicalHours}`, {
+      const response = await axios.get(`${apiUrl}/history/${historicalHours}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       console.log('Historical data response:', response.data);
@@ -519,7 +559,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode }) 
           {isLoading && <Typography>Loading...</Typography>}
           {error && <Typography color="error">{error}</Typography>}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Connected to server at: {API_BASE_URL}
+            Connected to server at: {apiUrl}
           </Typography>
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <Plotly

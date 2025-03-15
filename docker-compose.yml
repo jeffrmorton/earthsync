@@ -125,7 +125,9 @@ services:
     ports:
       - "3002:3000"
     volumes:
-      - ./grafana-dashboard.json:/var/lib/grafana/dashboards/earthsync-dashboard.json
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/earthsync-dashboard.json
     networks:
       - earthsync-network
     deploy:
