@@ -1,5 +1,5 @@
 /**
- * Detector module to generate and publish spectrogram data.
+ * Detector module to generate and publish spectrogram data to Redis streams.
  */
 require('dotenv').config();
 const Redis = require('ioredis');
@@ -22,7 +22,7 @@ const redisHost = process.env.REDIS_HOST;
 const redisPort = parseInt(process.env.REDIS_PORT, 10);
 const redisPassword = process.env.REDIS_PASSWORD;
 const INTERVAL = parseInt(process.env.DETECTOR_INTERVAL, 10) || 5000;
-const DETECTOR_BATCH_SIZE = 2;
+const DETECTOR_BATCH_SIZE = parseInt(process.env.DETECTOR_BATCH_SIZE, 10) || 2;
 
 if (!redisHost || !redisPort || !redisPassword) {
   logger.error('Configuration missing');
@@ -38,23 +38,25 @@ const redisClient = new Redis({
 
 const FREQUENCY_RANGE = 5501;
 const SCHUMANN_FREQUENCIES = [7.83, 14.3, 20.8, 27.3, 33.8, 39.0, 45.0, 51.0];
-const NOISE_LEVEL = 2.0;
+const NOISE_LEVEL_BASE = 2.0;
 const FREQUENCY_SHIFT = 0.3;
 const BASE_AMPLITUDE = 15.0;
-const AMPLITUDE_DECREASE_FACTOR = 0.8;
+const AMPLITUDE_DECREASE_FACTOR_BASE = 0.8;
 
 function generateSpectrogram() {
   const spectrogram = new Array(FREQUENCY_RANGE).fill(0);
+  const noiseLevel = NOISE_LEVEL_BASE * (0.8 + Math.random() * 0.4); // Vary noise by ±20%
+  const amplitudeDecreaseFactor = AMPLITUDE_DECREASE_FACTOR_BASE * (0.9 + Math.random() * 0.2); // Vary factor by ±10%
   SCHUMANN_FREQUENCIES.forEach((freq, index) => {
     const shift = (Math.random() - 0.5) * FREQUENCY_SHIFT;
     const indexHz = Math.floor((freq + shift) * 100);
-    const amplitudeScale = BASE_AMPLITUDE * Math.pow(AMPLITUDE_DECREASE_FACTOR, index);
+    const amplitudeScale = BASE_AMPLITUDE * Math.pow(amplitudeDecreaseFactor, index);
     for (let i = Math.max(0, indexHz - 50); i < Math.min(FREQUENCY_RANGE, indexHz + 50); i++) {
       const distance = Math.abs(i - indexHz);
       spectrogram[i] += amplitudeScale * Math.exp(-(distance * distance) / 200);
     }
   });
-  for (let i = 0; i < FREQUENCY_RANGE; i++) spectrogram[i] += Math.random() * NOISE_LEVEL;
+  for (let i = 0; i < FREQUENCY_RANGE; i++) spectrogram[i] += Math.random() * noiseLevel;
   logger.info('Spectrogram generated', { sample: spectrogram.slice(780, 790) });
   return spectrogram;
 }
@@ -67,15 +69,19 @@ async function publishSpectrogramBatch() {
   const message = { spectrogram: batch, timestamp: new Date().toISOString(), interval: INTERVAL };
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await redisClient.publish('spectrogram_updates', JSON.stringify(message));
-      logger.info('Spectrogram batch published', { timestamp: message.timestamp, count: batch.length });
+      await redisClient.xadd('spectrogram_stream', '*', 'data', JSON.stringify(message));
+      logger.info('Spectrogram batch published to stream', { timestamp: message.timestamp, count: batch.length });
       return;
     } catch (err) {
       logger.error(`Publish attempt ${attempt} failed`, { error: err.message });
-      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      if (attempt === 3) {
+        logger.error('Max retries reached, giving up');
+      } else {
+        logger.info(`Retry successful on attempt ${attempt}`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
     }
   }
-  logger.error('Max retries reached, giving up');
 }
 
 async function startDetector() {

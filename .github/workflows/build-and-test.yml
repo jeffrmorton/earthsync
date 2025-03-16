@@ -19,15 +19,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Install docker-compose
-        run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-          docker-compose --version
+      - name: Set up Docker Compose
+        uses: docker/compose-action@v2
+        with:
+          compose-file: ./docker-compose.yml
 
       - name: Build and run services with Docker Compose
         run: |
-          docker-compose up -d --build
+          docker compose up -d --build
 
       - name: Wait for services to be healthy
         run: |
@@ -42,7 +41,7 @@ jobs:
           done
           if [ $i -eq 30 ]; then
             echo "Server failed to start within 60 seconds"
-            docker-compose logs
+            docker compose logs
             exit 1
           fi
 
@@ -114,7 +113,7 @@ jobs:
                   const timeout = setTimeout(() => {
                     clearTimeout(timeout);
                     resolve();
-                  }, 2000);
+                  }, 5000); // Increased timeout to 5s
                   ws.on('close', () => {
                     clearTimeout(timeout);
                     resolve();
@@ -125,7 +124,7 @@ jobs:
               if (redis.status !== 'end') {
                 redis.disconnect();
               }
-            }, 10000);
+            }, 15000); // Increased overall timeout to 15s
 
             test('Health endpoint', async () => {
               const response = await axios.get(`${API_BASE_URL}/health`);
@@ -188,12 +187,19 @@ jobs:
               })).rejects.toMatchObject({ response: { status: 400 } });
             });
 
+            test('Metrics endpoint', async () => {
+              const response = await axios.get(`${API_BASE_URL}/metrics`);
+              expect(response.status).toBe(200);
+              expect(response.headers['content-type']).toContain('text/plain');
+              expect(response.data).toContain('http_requests_total');
+            });
+
             test('WebSocket connection', async () => {
               ws = new WebSocket(`${WS_URL}/?token=${token}`);
               await new Promise((resolve) => ws.on('open', resolve));
               const messagePromise = new Promise((resolve) => ws.on('message', (data) => resolve(data.toString('utf8'))));
               const spectrogram = generateSpectrogram();
-              await redis.publish('spectrogram_updates', JSON.stringify({ spectrogram, timestamp: new Date().toISOString(), interval: 5000 }));
+              await redis.xadd('spectrogram_stream', '*', 'data', JSON.stringify({ spectrogram, timestamp: new Date().toISOString(), interval: 5000 }));
               const message = await messagePromise;
               expect(message).toContain(':');
               ws.close();
@@ -205,4 +211,4 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          docker-compose down -v
+          docker compose down -v

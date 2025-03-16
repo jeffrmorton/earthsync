@@ -56,7 +56,8 @@ async function initializeDatabase() {
         password VARCHAR(255) NOT NULL
       )
     `);
-    logger.info('Users table created');
+    await pool.query('CREATE INDEX idx_users_username ON users(username)');
+    logger.info('Users table and index created');
   } catch (err) {
     logger.error('Database initialization failed', { error: err.message });
     process.exit(1);

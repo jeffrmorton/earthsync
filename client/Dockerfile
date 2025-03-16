@@ -1,4 +1,4 @@
-# Use Node.js 18 as the base image
+# Use Node.js 18 as the base image for building
 FROM node:18.20.7 AS builder
 
 WORKDIR /app

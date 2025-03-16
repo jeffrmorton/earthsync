@@ -13,8 +13,7 @@ WORKDIR /app
 
 COPY --from=builder /app /app
 
-RUN useradd -m postgres || true
-USER postgres
+USER node
 
 EXPOSE 3000
 

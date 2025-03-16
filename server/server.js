@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const cors = require('cors');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
 const { query, end } = require('./db.js');
 const { authenticateToken } = require('./middleware.js');
 const WebSocket = require('ws');
@@ -34,6 +35,14 @@ const websocketConnections = new promClient.Gauge({
   registers: [register],
 });
 
+const httpRequestLatency = new promClient.Histogram({
+  name: 'http_request_latency_seconds',
+  help: 'Latency of HTTP requests in seconds',
+  labelNames: ['method', 'route'],
+  buckets: [0.1, 0.5, 1, 2, 5],
+  registers: [register],
+});
+
 const logLevel = process.env.LOG_LEVEL || 'info';
 const logger = winston.createLogger({
   level: logLevel,
@@ -52,6 +61,8 @@ if (!JWT_SECRET) {
   logger.error('JWT_SECRET is not defined in environment variables');
   process.exit(1);
 }
+
+const CLEANUP_INTERVAL_MS = parseInt(process.env.CLEANUP_INTERVAL_MS, 10) || 60 * 60 * 1000;
 
 process.on('uncaughtException', (err) => {
   logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
@@ -83,9 +94,6 @@ const redisClient = new Redis({
   retryStrategy: (times) => Math.min(times * 50, 10000),
 });
 
-const redisPublisher = redisClient;
-const redisSubscriber = redisClient.duplicate();
-
 async function waitForRedis(client, clientName) {
   return new Promise((resolve, reject) => {
     client.on('connect', () => resolve());
@@ -108,6 +116,18 @@ const userKeys = new Map();
 waitForRedis(redisClient, 'Redis client').then(async () => {
   const app = express();
 
+  // Initialize spectrogram_history if it doesn't exist
+  try {
+    const historyLength = await redisClient.llen('spectrogram_history');
+    if (historyLength === 0) {
+      logger.info('Initializing empty spectrogram_history list');
+      await redisClient.lpush('spectrogram_history', JSON.stringify({ spectrogram: [], timestamp: new Date().toISOString(), interval: 5000 }));
+      await redisClient.ltrim('spectrogram_history', 0, 999); // Ensure it’s within bounds
+    }
+  } catch (err) {
+    logger.error('Failed to initialize spectrogram_history', { error: err.message });
+  }
+
   app.use(cors({
     origin: 'http://localhost:3001',
     methods: ['GET', 'POST', 'DELETE'],
@@ -116,11 +136,15 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
 
   app.use(compression());
   app.use(express.json());
+  app.use(helmet()); // Adds security headers
 
   app.use((req, res, next) => {
+    const start = Date.now();
     const originalEnd = res.end;
     res.end = function (...args) {
+      const latency = (Date.now() - start) / 1000;
       httpRequestCounter.inc({ method: req.method, route: req.path, status: res.statusCode });
+      httpRequestLatency.observe({ method: req.method, route: req.path }, latency);
       originalEnd.apply(res, args);
     };
     next();
@@ -248,6 +272,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
       if (result.rowCount === 0) {
         return res.status(404).json({ error: 'User not found' });
       }
+      userKeys.delete(username); // Clean up user key
       logger.info('User deleted', { username });
       res.status(200).json({ message: 'User deleted successfully' });
     } catch (err) {
@@ -267,6 +292,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
   });
 
   const server = app.listen(3000, () => logger.info('Server running on port 3000'));
+  // TODO: Add HTTPS support with self-signed certs for dev (e.g., using 'https' module)
   const wss = new WebSocket.Server({ server });
 
   wss.on('connection', async (ws, req) => {
@@ -292,31 +318,40 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     }
   });
 
-  redisSubscriber.subscribe('spectrogram_updates', (err) => {
-    if (err) logger.error('Subscription error', { error: err.message });
-  });
-
-  redisSubscriber.on('message', async (channel, message) => {
+  // Consume Redis stream instead of pub/sub
+  setInterval(async () => {
     try {
-      const parsedMessage = JSON.parse(message);
-      if (!parsedMessage.spectrogram || !parsedMessage.timestamp || !parsedMessage.interval) {
-        throw new Error('Missing message fields');
+      const streamData = await redisClient.xread('COUNT', 100, 'STREAMS', 'spectrogram_stream', '0');
+      if (streamData) {
+        streamData.forEach(([streamName, messages]) => {
+          messages.forEach(([id, fields]) => {
+            const message = fields[1]; // 'data' field
+            try {
+              const parsedMessage = JSON.parse(message);
+              if (!parsedMessage.spectrogram || !parsedMessage.timestamp || !parsedMessage.interval) {
+                throw new Error('Missing message fields');
+              }
+              redisClient.lpush('spectrogram_history', message); // Store in history
+              redisClient.ltrim('spectrogram_history', 0, 999);
+
+              wss.clients.forEach((ws) => {
+                if (ws.readyState === WebSocket.OPEN && userKeys.has(ws.user.username)) {
+                  const key = userKeys.get(ws.user.username);
+                  const encryptedMessage = encryptMessage(message, key);
+                  ws.send(encryptedMessage);
+                }
+              });
+              redisClient.xdel('spectrogram_stream', id); // Remove processed message
+            } catch (err) {
+              logger.error('Message processing error', { error: err.message, message });
+            }
+          });
+        });
       }
-
-      await redisClient.lpush('spectrogram_history', JSON.stringify(parsedMessage));
-      await redisClient.ltrim('spectrogram_history', 0, 999);
-
-      wss.clients.forEach((ws) => {
-        if (ws.readyState === WebSocket.OPEN && userKeys.has(ws.user.username)) {
-          const key = userKeys.get(ws.user.username);
-          const encryptedMessage = encryptMessage(message, key);
-          ws.send(encryptedMessage);
-        }
-      });
     } catch (err) {
-      logger.error('Message processing error', { error: err.message });
+      logger.error('Stream read error:', err);
     }
-  });
+  }, 1000);
 
   wss.on('error', (err) => logger.error('WebSocket server error', { error: err.message }));
 
@@ -339,14 +374,13 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     } catch (err) {
       logger.error('Cleanup error', { error: err.message });
     }
-  }, 60 * 60 * 1000);
+  }, CLEANUP_INTERVAL_MS);
 
   process.on('SIGINT', async () => {
     logger.info('Shutting down server...');
     wss.clients.forEach((ws) => ws.close(1000, 'Server shutting down'));
     try {
       await redisClient.quit();
-      await redisSubscriber.quit();
       await end();
       server.close(() => {
         logger.info('Server shut down');

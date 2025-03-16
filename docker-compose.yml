@@ -21,12 +21,35 @@ services:
           memory: 512M
     restart: unless-stopped
 
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=password
+      - REDIS_EXPORTER_CHECK_SINGLE_KEYS=spectrogram_history
+      - REDIS_EXPORTER_DEBUG=true
+    ports:
+      - "9121:9121"
+    networks:
+      - earthsync-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+    restart: unless-stopped
+
   postgres:
     image: postgres:13
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: earthsync
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=earthsync
     ports:
       - "5432:5432"
     volumes:
@@ -98,6 +121,11 @@ services:
       - server
     networks:
       - earthsync-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     deploy:
       resources:
         limits:

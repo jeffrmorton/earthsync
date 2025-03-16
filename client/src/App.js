@@ -2,11 +2,11 @@
  * Main application component for EarthSync client.
  * Handles authentication, theme toggling, and renders the SpectrogramPage.
  */
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import CryptoJS from 'crypto-js';
-import { AES, enc, mode, pad } from 'crypto-js';
 import Plotly from 'react-plotly.js';
+import debounce from 'lodash.debounce';
 import throttle from 'lodash.throttle';
 import {
   AppBar, Toolbar, Typography, Drawer, List, ListItem, ListItemIcon, ListItemText,
@@ -27,7 +27,7 @@ async function determineServerUrls(defaultApiUrl, defaultWsUrl) {
   const fallbackApiUrl = 'http://localhost:3000';
   const fallbackWsUrl = 'ws://localhost:3000';
 
-  // Test if the default API URL is reachable
+  // Test if the default API URL is reachable (useful for WSL2 or local dev)
   try {
     await axios.get(`${defaultApiUrl}/health`, { timeout: 2000 });
     console.log(`Using default server URLs: API=${defaultApiUrl}, WS=${defaultWsUrl}`);
@@ -211,12 +211,12 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
   const appBarHeight = 64;
 
   const updateSpectrogram = useMemo(() => throttle((newData) => {
+    console.log('Received spectrogram data:', newData); // Log raw incoming data
     if (!Array.isArray(newData)) {
       console.error('Invalid spectrogram data received: not an array', newData);
       setError('Received invalid spectrogram data');
       return;
     }
-    // Handle batched spectrograms (array of arrays)
     const validSpectrograms = newData.filter(subArray => 
       Array.isArray(subArray) && subArray.length > 0 && subArray.every(v => typeof v === 'number' && !isNaN(v))
     );
@@ -253,7 +253,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     if (token) fetchKey();
   }, [token, apiUrl]);
 
-  const connectWebSocket = () => {
+  const connectWebSocket = useCallback(() => {
     if (!token || !encryptionKey) {
       console.log('Skipping WebSocket connection: token or encryptionKey missing', { token, encryptionKey });
       return;
@@ -266,9 +266,11 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     console.log('Encryption key (hex):', encryptionKey);
 
     ws.onopen = () => console.log('WebSocket connected');
+
     ws.onmessage = (event) => {
       try {
         const messageStr = event.data;
+        console.log('Raw WebSocket message:', messageStr); // Log raw message
         if (!messageStr) {
           console.log('Received empty WebSocket message');
           return;
@@ -276,15 +278,16 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
         const [encrypted, iv] = messageStr.split(':');
         if (!encrypted || !iv) throw new Error('Invalid message format');
 
-        const encryptedBuf = enc.Base64.parse(encrypted);
-        const ivBuf = enc.Base64.parse(iv);
-        const keyWordArray = enc.Hex.parse(encryptionKey);
+        const encryptedBuf = CryptoJS.enc.Base64.parse(encrypted);
+        const ivBuf = CryptoJS.enc.Base64.parse(iv);
+        const keyWordArray = CryptoJS.enc.Hex.parse(encryptionKey);
         const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: encryptedBuf });
-        const decrypted = AES.decrypt(cipherParams, keyWordArray, { iv: ivBuf, mode: mode.CBC, padding: pad.Pkcs7 });
-        const messageStrDecrypted = decrypted.toString(enc.Utf8);
+        const decrypted = CryptoJS.AES.decrypt(cipherParams, keyWordArray, { iv: ivBuf, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
+        const messageStrDecrypted = decrypted.toString(CryptoJS.enc.Utf8);
         if (!messageStrDecrypted) throw new Error('Decryption failed');
 
         const message = JSON.parse(messageStrDecrypted);
+        console.log('Decrypted message:', message); // Log full decrypted message
         if (!message.spectrogram) throw new Error('Invalid spectrogram data');
 
         console.log('Decrypted message sample (around 7.83 Hz):', 
@@ -328,7 +331,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
         wsRef.current = null;
       }
     };
-  };
+  }, [token, encryptionKey, wsUrl]);
 
   const fetchHistoricalData = async () => {
     setIsLoading(true);
@@ -337,12 +340,25 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
         headers: { Authorization: `Bearer ${token}` }
       });
       console.log('Historical data response:', response.data);
+      // Flatten batched spectrograms into a single array of individual spectrograms
       const historicalSpectrograms = Array.isArray(response.data)
-        ? response.data.filter(s => Array.isArray(s) && s.every(v => typeof v === 'number' && !isNaN(v)))
+        ? response.data.flatMap(batch => {
+            if (!Array.isArray(batch)) {
+              console.log('Invalid historical batch (not an array):', batch);
+              return [];
+            }
+            return batch.filter(s => {
+              const isValid = Array.isArray(s) && s.length > 0 && s.every(v => typeof v === 'number' && !isNaN(v));
+              if (!isValid) console.log('Invalid historical spectrogram:', s);
+              return isValid;
+            });
+          })
         : [];
       if (historicalSpectrograms.length === 0) {
         console.warn('No valid historical spectrograms found');
         setError('No valid historical data available');
+      } else {
+        console.log('Valid historical spectrograms found:', historicalSpectrograms.length);
       }
       setSpectrogramData(historicalSpectrograms.slice(-timeSteps));
     } catch (err) {
@@ -360,8 +376,9 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     }
     if (historicalMode) fetchHistoricalData();
     else return connectWebSocket();
-  }, [historicalMode, historicalHours, token, encryptionKey, timeSteps]);
+  }, [historicalMode, historicalHours, token, encryptionKey, timeSteps, connectWebSocket]);
 
+  // Downsampling factor of 5 reduces data points for performance (5501 -> 1101 frequencies)
   const downsampleFactor = 5;
   const xLabels = useMemo(() => Array(5501).fill(0)
     .map((_, i) => (i / 100).toFixed(2))
@@ -449,6 +466,10 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     modebar: { orientation: 'h', y: 0, yanchor: 'top', x: 1, xanchor: 'right' },
   }), [darkMode, minAmplitude, maxAmplitude, appBarHeight]);
 
+  // Debounced handlers for user inputs to reduce re-renders
+  const debouncedSetTimeSteps = useCallback(debounce((value) => setTimeSteps(Math.floor(value / 5)), 300), []);
+  const debouncedSetHistoricalHours = useCallback(debounce((value) => setHistoricalHours(value), 300), []);
+
   return (
     <>
       <Box sx={{ display: 'flex' }}>
@@ -503,7 +524,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
               <FormLabel>Time Window (seconds)</FormLabel>
               <Slider
                 value={timeSteps * 5}
-                onChange={(_, newValue) => setTimeSteps(Math.floor(newValue / 5))}
+                onChange={(_, newValue) => debouncedSetTimeSteps(newValue)}
                 min={30}
                 max={600}
                 step={5}
@@ -527,7 +548,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
                 <FormLabel>Historical Data (hours)</FormLabel>
                 <Slider
                   value={historicalHours}
-                  onChange={(_, newValue) => setHistoricalHours(newValue)}
+                  onChange={(_, newValue) => debouncedSetHistoricalHours(newValue)}
                   min={1}
                   max={24}
                   step={1}
