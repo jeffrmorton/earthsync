@@ -17,8 +17,8 @@ const WebSocket = require('ws');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const promClient = require('prom-client');
+const http = require('http'); // Changed from https
 
-// Prometheus metrics setup
 const register = new promClient.Registry();
 promClient.collectDefaultMetrics({ register });
 
@@ -116,13 +116,12 @@ const userKeys = new Map();
 waitForRedis(redisClient, 'Redis client').then(async () => {
   const app = express();
 
-  // Initialize spectrogram_history if it doesn't exist
   try {
     const historyLength = await redisClient.llen('spectrogram_history');
     if (historyLength === 0) {
       logger.info('Initializing empty spectrogram_history list');
       await redisClient.lpush('spectrogram_history', JSON.stringify({ spectrogram: [], timestamp: new Date().toISOString(), interval: 5000 }));
-      await redisClient.ltrim('spectrogram_history', 0, 999); // Ensure it’s within bounds
+      await redisClient.ltrim('spectrogram_history', 0, 999);
     }
   } catch (err) {
     logger.error('Failed to initialize spectrogram_history', { error: err.message });
@@ -136,7 +135,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
 
   app.use(compression());
   app.use(express.json());
-  app.use(helmet()); // Adds security headers
+  app.use(helmet());
 
   app.use((req, res, next) => {
     const start = Date.now();
@@ -272,7 +271,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
       if (result.rowCount === 0) {
         return res.status(404).json({ error: 'User not found' });
       }
-      userKeys.delete(username); // Clean up user key
+      userKeys.delete(username);
       logger.info('User deleted', { username });
       res.status(200).json({ message: 'User deleted successfully' });
     } catch (err) {
@@ -291,8 +290,9 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     }
   });
 
-  const server = app.listen(3000, () => logger.info('Server running on port 3000'));
-  // TODO: Add HTTPS support with self-signed certs for dev (e.g., using 'https' module)
+  const server = http.createServer(app).listen(3000, () => 
+    logger.info('Server running on HTTP port 3000')
+  );
   const wss = new WebSocket.Server({ server });
 
   wss.on('connection', async (ws, req) => {
@@ -318,20 +318,19 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     }
   });
 
-  // Consume Redis stream instead of pub/sub
   setInterval(async () => {
     try {
       const streamData = await redisClient.xread('COUNT', 100, 'STREAMS', 'spectrogram_stream', '0');
       if (streamData) {
         streamData.forEach(([streamName, messages]) => {
           messages.forEach(([id, fields]) => {
-            const message = fields[1]; // 'data' field
+            const message = fields[1];
             try {
               const parsedMessage = JSON.parse(message);
               if (!parsedMessage.spectrogram || !parsedMessage.timestamp || !parsedMessage.interval) {
                 throw new Error('Missing message fields');
               }
-              redisClient.lpush('spectrogram_history', message); // Store in history
+              redisClient.lpush('spectrogram_history', message);
               redisClient.ltrim('spectrogram_history', 0, 999);
 
               wss.clients.forEach((ws) => {
@@ -341,7 +340,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
                   ws.send(encryptedMessage);
                 }
               });
-              redisClient.xdel('spectrogram_stream', id); // Remove processed message
+              redisClient.xdel('spectrogram_stream', id);
             } catch (err) {
               logger.error('Message processing error', { error: err.message, message });
             }

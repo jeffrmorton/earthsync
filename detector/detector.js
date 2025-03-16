@@ -41,23 +41,30 @@ const SCHUMANN_FREQUENCIES = [7.83, 14.3, 20.8, 27.3, 33.8, 39.0, 45.0, 51.0];
 const NOISE_LEVEL_BASE = 2.0;
 const FREQUENCY_SHIFT = 0.3;
 const BASE_AMPLITUDE = 15.0;
+const AMPLITUDE_VARIATION = 0.3; // ±30% variation over time
+const AMPLITUDE_CYCLE_DURATION = 24 * 60 * 60 * 1000; // 24-hour cycle in ms
 const AMPLITUDE_DECREASE_FACTOR_BASE = 0.8;
 
 function generateSpectrogram() {
   const spectrogram = new Array(FREQUENCY_RANGE).fill(0);
-  const noiseLevel = NOISE_LEVEL_BASE * (0.8 + Math.random() * 0.4); // Vary noise by ±20%
-  const amplitudeDecreaseFactor = AMPLITUDE_DECREASE_FACTOR_BASE * (0.9 + Math.random() * 0.2); // Vary factor by ±10%
+  const noiseLevel = NOISE_LEVEL_BASE * (0.8 + Math.random() * 0.4);
+  const amplitudeDecreaseFactor = AMPLITUDE_DECREASE_FACTOR_BASE * (0.9 + Math.random() * 0.2);
+  
+  const now = Date.now();
+  const timeFactor = Math.sin(2 * Math.PI * (now % AMPLITUDE_CYCLE_DURATION) / AMPLITUDE_CYCLE_DURATION);
+  const amplitudeMod = 1 + AMPLITUDE_VARIATION * timeFactor;
+
   SCHUMANN_FREQUENCIES.forEach((freq, index) => {
     const shift = (Math.random() - 0.5) * FREQUENCY_SHIFT;
     const indexHz = Math.floor((freq + shift) * 100);
-    const amplitudeScale = BASE_AMPLITUDE * Math.pow(amplitudeDecreaseFactor, index);
+    const amplitudeScale = BASE_AMPLITUDE * amplitudeMod * Math.pow(amplitudeDecreaseFactor, index);
     for (let i = Math.max(0, indexHz - 50); i < Math.min(FREQUENCY_RANGE, indexHz + 50); i++) {
       const distance = Math.abs(i - indexHz);
       spectrogram[i] += amplitudeScale * Math.exp(-(distance * distance) / 200);
     }
   });
   for (let i = 0; i < FREQUENCY_RANGE; i++) spectrogram[i] += Math.random() * noiseLevel;
-  logger.info('Spectrogram generated', { sample: spectrogram.slice(780, 790) });
+  logger.info('Spectrogram generated', { sample: spectrogram.slice(780, 790), amplitudeMod });
   return spectrogram;
 }
 

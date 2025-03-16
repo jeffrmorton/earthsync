@@ -1,7 +1,10 @@
 # EarthSync Project
 
 ## Overview
-EarthSync is a web application that visualizes Schumann Resonance data in 3D using real-time spectrogram data. It includes a client interface, a server for handling API and WebSocket connections, a detector to generate synthetic data, and monitoring with Prometheus and Grafana. Data flows from the detector to the server via Redis streams (`spectrogram_stream`), with historical data stored in a Redis list (`spectrogram_history`).
+EarthSync is a web application that visualizes Schumann Resonance data in 3D using real-time spectrogram data. It includes a client interface, a server for handling API and WebSocket connections, a detector to generate synthetic data, and monitoring with Prometheus and Grafana.
+
+## API Documentation
+The server API is documented using OpenAPI 3.0. See `server/openapi.yaml` for the full specification. You can view it with tools like Swagger UI by importing the file.
 
 ## Features
 - Real-time 3D visualization of Schumann Resonance with labeled axes (Frequency, Time, Amplitude).
@@ -12,6 +15,7 @@ EarthSync is a web application that visualizes Schumann Resonance data in 3D usi
 - Monitoring with Prometheus and Grafana (HTTP requests, WebSocket connections, Redis queue length).
 - CI/CD pipeline with GitHub Actions.
 - Dockerized deployment with healthchecks.
+- HTTP support for development (HTTPS can be enabled with proper certificates).
 
 ## Prerequisites
 - Docker
@@ -27,7 +31,7 @@ EarthSync is a web application that visualizes Schumann Resonance data in 3D usi
 5. Start the application: `docker-compose up --build`
 
 ## Usage
-- **Client Interface**: Open `http://localhost:3001` in your browser, log in or register with a username and password, and use the interface to switch between real-time and historical data, adjust settings, and toggle themes. The client automatically falls back to `http://localhost:3000` if `http://server:3000` is not resolvable (e.g., on Windows with WSL2).
+- **Client Interface**: Open `http://localhost:3001` in your browser, log in or register with a username and password, and use the interface to switch between real-time and historical data, adjust settings, and toggle themes. The client uses `http://localhost:3000` as the API and WebSocket endpoint.
 - **Prometheus Metrics**: Access at `http://localhost:9090` to view raw metrics scraped from the server and Redis exporter.
 - **Grafana Dashboard**: Access at `http://localhost:3002` (default login: admin/admin). The "EarthSync Server Metrics" dashboard is pre-configured and loaded automatically with Prometheus as the data source, displaying:
   - **HTTP Requests Rate**: Rate of HTTP requests per second, broken down by method, route, and status.
@@ -41,8 +45,8 @@ EarthSync is a web application that visualizes Schumann Resonance data in 3D usi
 
 ## Environment Variables
 Edit `.env` files in `client`, `server`, and `detector` directories to configure:
-- `REACT_APP_API_BASE_URL` (client): API endpoint (default: `http://server:3000`, falls back to `http://localhost:3000`)
-- `REACT_APP_WS_URL` (client): WebSocket endpoint (default: `ws://server:3000`, falls back to `ws://localhost:3000`)
+- `REACT_APP_API_BASE_URL` (client): API endpoint (default: `http://localhost:3000`)
+- `REACT_APP_WS_URL` (client): WebSocket endpoint (default: `ws://localhost:3000`)
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`: Redis connection details
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`: PostgreSQL details
 - `JWT_SECRET`: Secret for JWT authentication (set in `docker-compose.yml`)
@@ -72,6 +76,7 @@ Docker Compose sets the following resource limits (adjust in `docker-compose.yml
 ## Troubleshooting
 - **Build fails**: Ensure Docker and Docker Compose are installed and running. Check `docker --version` and `docker-compose --version`.
 - **Connection issues**: Verify ports (3000, 3001, 6379, 5432, 9121, 9090, 3002) are free and `.env` settings match. On Windows/WSL2, use `localhost` if container names don’t resolve.
+- **Service unhealthy**: Check logs (`docker-compose logs <service>`) for errors. For `redis-exporter`, ensure Redis is accessible (`docker exec -it earthsync-redis-1 redis-cli -a password ping` should return "PONG").
 - **Log level not applied**: Ensure `LOG_LEVEL` is set correctly in `.env` files and restart containers.
 - **Graph not rendering**: Check client logs (`docker-compose logs client`) for WebSocket messages and spectrogram data. Ensure `spectrogram_stream` has data (`docker exec -it earthsync-redis-1 redis-cli -a password xlen spectrogram_stream`).
 - **Historical data error**: Verify Redis history (`docker exec -it earthsync-redis-1 redis-cli -a password lrange spectrogram_history 0 -1`) contains valid JSON with `spectrogram` arrays.
@@ -85,9 +90,9 @@ Docker Compose sets the following resource limits (adjust in `docker-compose.yml
   - If missing, check Redis exporter logs (`docker-compose logs redis-exporter`) for errors. Confirm `spectrogram_history` exists and has data (`docker exec -it earthsync-redis-1 redis-cli -a password llen spectrogram_history`).
   - Ensure the server has initialized `spectrogram_history` (`docker-compose logs server` should show "Initializing empty spectrogram_history list").
 - **Dashboard Not Provisioned**: 
-  - Check Grafana logs (`docker-compose logs grafana`) for errors like "Failed to load dashboard" or "invalid JSON" (resolved by restoring the correct file).
-  - Verify the file path in `docker-compose.yml` matches the provisioning config (`/etc/grafana/provisioning/dashboards/earthsync-dashboard.json`).
-  - Ensure `grafana-dashboard.json` is valid JSON (use a JSON validator online; the file above is valid).
+  - Check Grafana logs (`docker-compose logs grafana`) for errors like "Failed to load dashboard" or "permission denied".
+  - Verify the dashboard file exists in the container: `docker exec -it earthsync_grafana_1 ls -l /etc/grafana/provisioning/dashboards/earthsync-dashboard.json`.
+  - Ensure the file is readable: `docker exec -it earthsync_grafana_1 cat /etc/grafana/provisioning/dashboards/earthsync-dashboard.json`.
   - Restart Grafana: `docker-compose restart grafana`.
 - **Port conflicts**: Check with `netstat -tuln` (Linux) or `netstat -aon` (Windows) and adjust `docker-compose.yml`.
 - View logs: `docker-compose logs <service_name>`.
@@ -96,6 +101,7 @@ Docker Compose sets the following resource limits (adjust in `docker-compose.yml
 The repository includes a GitHub Actions workflow (`build-and-test.yml`) that:
 - Builds all Docker images on push or pull request to `main`.
 - Runs tests for API endpoints (health, register, login, key exchange, history, metrics) and WebSocket connectivity using Redis streams.
+- Runs client-side tests with React Testing Library.
 - Cleans up resources afterward.
 
 ## License

@@ -25,11 +25,9 @@ jobs:
 
       - name: Install Docker Compose
         run: |
-          # Install Docker Compose as a plugin for the Docker CLI
           sudo mkdir -p /usr/local/lib/docker/cli-plugins
           sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
           sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-          # Verify installation
           docker compose version
         continue-on-error: false
 
@@ -64,10 +62,10 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          npm install axios ws ioredis bcryptjs jsonwebtoken jest --save-dev
+          npm install axios ws ioredis bcryptjs jsonwebtoken jest @testing-library/react @testing-library/jest-dom --save-dev
         continue-on-error: false
 
-      - name: Run tests
+      - name: Run server and integration tests
         env:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
@@ -126,7 +124,7 @@ jobs:
                   const timeout = setTimeout(() => {
                     clearTimeout(timeout);
                     resolve();
-                  }, 5000); // Increased timeout to 5s
+                  }, 5000);
                   ws.on('close', () => {
                     clearTimeout(timeout);
                     resolve();
@@ -137,7 +135,7 @@ jobs:
               if (redis.status !== 'end') {
                 redis.disconnect();
               }
-            }, 15000); // Increased overall timeout to 15s
+            }, 15000);
 
             test('Health endpoint', async () => {
               const response = await axios.get(`${API_BASE_URL}/health`);
@@ -147,9 +145,7 @@ jobs:
 
             test('Register with valid data', async () => {
               try {
-                await axios.delete(`${API_BASE_URL}/users/testuser`, {
-                  headers: { Authorization: `Bearer ${token}` }
-                });
+                await axios.delete(`${API_BASE_URL}/users/testuser`, { headers: { Authorization: `Bearer ${token}` } });
               } catch (err) {}
               const response = await axios.post(`${API_BASE_URL}/register`, { username: 'testuser', password: 'testpass123' });
               expect(response.status).toBe(201);
@@ -173,9 +169,7 @@ jobs:
             });
 
             test('Key exchange', async () => {
-              const response = await axios.post(`${API_BASE_URL}/key-exchange`, {}, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
+              const response = await axios.post(`${API_BASE_URL}/key-exchange`, {}, { headers: { Authorization: `Bearer ${token}` } });
               expect(response.status).toBe(200);
               expect(response.data.key).toBeDefined();
             });
@@ -187,17 +181,14 @@ jobs:
                 const timestamp = new Date(Date.now() - (60 - i * 10) * 60 * 1000).toISOString();
                 await redis.lpush('spectrogram_history', JSON.stringify({ spectrogram, timestamp, interval: 5000 }));
               }
-              const response = await axios.get(`${API_BASE_URL}/history/1`, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
+              const response = await axios.get(`${API_BASE_URL}/history/1`, { headers: { Authorization: `Bearer ${token}` } });
               expect(response.status).toBe(200);
               expect(Array.isArray(response.data)).toBe(true);
             });
 
             test('History with invalid hours', async () => {
-              await expect(axios.get(`${API_BASE_URL}/history/25`, {
-                headers: { Authorization: `Bearer ${token}` }
-              })).rejects.toMatchObject({ response: { status: 400 } });
+              await expect(axios.get(`${API_BASE_URL}/history/25`, { headers: { Authorization: `Bearer ${token}` } }))
+                .rejects.toMatchObject({ response: { status: 400 } });
             });
 
             test('Metrics endpoint', async () => {
@@ -220,6 +211,37 @@ jobs:
           });
           TEST_EOF
           npx jest test.js --runInBand --detectOpenHandles
+        continue-on-error: false
+
+      - name: Run client-side tests
+        run: |
+          cd client
+          cat << 'CLIENT_TEST_EOF' > src/App.test.js
+          import { render, screen, waitFor } from '@testing-library/react';
+          import App from './App';
+          import axios from 'axios';
+
+          jest.mock('axios');
+
+          describe('App Component', () => {
+            test('renders login form when not authenticated', () => {
+              render(<App />);
+              expect(screen.getByText('Login')).toBeInTheDocument();
+              expect(screen.getByLabelText('Username')).toBeInTheDocument();
+              expect(screen.getByLabelText('Password')).toBeInTheDocument();
+            });
+
+            test('shows spectrogram page after login', async () => {
+              axios.post.mockResolvedValueOnce({ data: { token: 'mock-token' } });
+              localStorage.setItem('token', 'mock-token');
+              render(<App />);
+              await waitFor(() => {
+                expect(screen.getByText(/Schumann Resonance 3D Surface Plot/i)).toBeInTheDocument();
+              });
+            });
+          });
+          CLIENT_TEST_EOF
+          npm test
         continue-on-error: false
 
       - name: Clean up

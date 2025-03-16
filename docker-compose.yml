@@ -35,8 +35,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      server:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9121/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
@@ -155,9 +158,10 @@ services:
     volumes:
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
-      - ./grafana/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/earthsync-dashboard.json
     networks:
       - earthsync-network
+    depends_on:
+      - prometheus
     deploy:
       resources:
         limits:
