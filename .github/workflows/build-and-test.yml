@@ -216,6 +216,7 @@ jobs:
       - name: Run client-side tests
         run: |
           cd client
+          npm install
           cat << 'CLIENT_TEST_EOF' > src/App.test.js
           import { render, screen, waitFor } from '@testing-library/react';
           import App from './App';
