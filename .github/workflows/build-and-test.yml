@@ -217,6 +217,8 @@ jobs:
         run: |
           cd client
           npm install
+          echo "Configuring Jest for ES Modules..."
+          echo "module.exports = { transformIgnorePatterns: ['/node_modules/(?!axios)/'] };" > jest.config.js
           cat << 'CLIENT_TEST_EOF' > src/App.test.js
           import { render, screen, waitFor } from '@testing-library/react';
           import App from './App';
