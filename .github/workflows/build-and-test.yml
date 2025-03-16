@@ -18,15 +18,20 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+        continue-on-error: false
 
       - name: Set up Docker Compose
-        uses: docker/compose-action@v2
+        uses: docker/compose-action@v2.3.0  # Use a specific stable version
         with:
           compose-file: ./docker-compose.yml
+        continue-on-error: false
 
       - name: Build and run services with Docker Compose
         run: |
           docker compose up -d --build
+        continue-on-error: false
 
       - name: Wait for services to be healthy
         run: |
@@ -44,15 +49,18 @@ jobs:
             docker compose logs
             exit 1
           fi
+        continue-on-error: false
 
       - name: Set up Node.js for testing
         uses: actions/setup-node@v4
         with:
           node-version: '18'
+        continue-on-error: false
 
       - name: Install test dependencies
         run: |
           npm install axios ws ioredis bcryptjs jsonwebtoken jest --save-dev
+        continue-on-error: false
 
       - name: Run tests
         env:
@@ -207,8 +215,10 @@ jobs:
           });
           TEST_EOF
           npx jest test.js --runInBand --detectOpenHandles
+        continue-on-error: false
 
       - name: Clean up
         if: always()
         run: |
           docker compose down -v
+        continue-on-error: false
