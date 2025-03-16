@@ -217,8 +217,6 @@ jobs:
         run: |
           cd client
           npm install
-          echo "Configuring Jest for ES Modules..."
-          echo "module.exports = { transformIgnorePatterns: ['/node_modules/(?!axios)/'] };" > jest.config.js
           cat << 'CLIENT_TEST_EOF' > src/App.test.js
           import { render, screen, waitFor } from '@testing-library/react';
           import App from './App';
@@ -227,15 +225,35 @@ jobs:
           jest.mock('axios');
 
           describe('App Component', () => {
-            test('renders login form when not authenticated', () => {
+            beforeEach(() => {
+              // Mock the /health endpoint called by determineServerUrls
+              axios.get.mockResolvedValueOnce({ status: 200 });
+            });
+
+            afterEach(() => {
+              localStorage.clear();
+              jest.clearAllMocks();
+            });
+
+            test('renders login form when not authenticated', async () => {
               render(<App />);
-              expect(screen.getByText('Login')).toBeInTheDocument();
-              expect(screen.getByLabelText('Username')).toBeInTheDocument();
-              expect(screen.getByLabelText('Password')).toBeInTheDocument();
+              // Wait for the async useEffect to complete
+              await waitFor(() => {
+                expect(screen.getByText('Login')).toBeInTheDocument();
+                expect(screen.getByLabelText('Username')).toBeInTheDocument();
+                expect(screen.getByLabelText('Password')).toBeInTheDocument();
+              });
             });
 
             test('shows spectrogram page after login', async () => {
-              axios.post.mockResolvedValueOnce({ data: { token: 'mock-token' } });
+              // Mock the /key-exchange endpoint to provide an encryption key
+              axios.post.mockImplementation((url) => {
+                if (url.includes('/key-exchange')) {
+                  return Promise.resolve({ data: { key: 'mock-key' } });
+                }
+                return Promise.resolve({ data: { token: 'mock-token' } });
+              });
+
               localStorage.setItem('token', 'mock-token');
               render(<App />);
               await waitFor(() => {
