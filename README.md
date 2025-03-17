@@ -101,7 +101,6 @@ Docker Compose sets the following resource limits (adjust in `docker-compose.yml
 The repository includes a GitHub Actions workflow (`build-and-test.yml`) that:
 - Builds all Docker images on push or pull request to `main`.
 - Runs tests for API endpoints (health, register, login, key exchange, history, metrics) and WebSocket connectivity using Redis streams.
-- Runs client-side tests with React Testing Library.
 - Cleans up resources afterward.
 
 ## License
