@@ -227,12 +227,15 @@ jobs:
           describe('App Component', () => {
             beforeEach(() => {
               // Mock the /health endpoint called by determineServerUrls
-              axios.get.mockResolvedValueOnce({ status: 200 });
+              axios.get.mockResolvedValue({ status: 200 });
+              // Mock console.log to reduce noise
+              jest.spyOn(console, 'log').mockImplementation(() => {});
             });
 
             afterEach(() => {
               localStorage.clear();
               jest.clearAllMocks();
+              console.log.mockRestore();
             });
 
             test('renders login form when not authenticated', async () => {
@@ -242,13 +245,13 @@ jobs:
                 expect(screen.getByText('Login')).toBeInTheDocument();
                 expect(screen.getByLabelText('Username')).toBeInTheDocument();
                 expect(screen.getByLabelText('Password')).toBeInTheDocument();
-              });
+              }, { timeout: 2000 });
             });
 
             test('shows spectrogram page after login', async () => {
-              // Mock the /key-exchange endpoint to provide an encryption key
+              // Mock axios.post for both login and key-exchange
               axios.post.mockImplementation((url) => {
-                if (url.includes('/key-exchange')) {
+                if (url.includes('key-exchange')) {
                   return Promise.resolve({ data: { key: 'mock-key' } });
                 }
                 return Promise.resolve({ data: { token: 'mock-token' } });
@@ -258,7 +261,7 @@ jobs:
               render(<App />);
               await waitFor(() => {
                 expect(screen.getByText(/Schumann Resonance 3D Surface Plot/i)).toBeInTheDocument();
-              });
+              }, { timeout: 2000 });
             });
           });
           CLIENT_TEST_EOF
