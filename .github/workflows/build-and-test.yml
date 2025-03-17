@@ -231,30 +231,9 @@ jobs:
           jest.mock('axios');
           jest.mock('lodash.debounce', () => jest.fn((fn) => fn));
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
-          jest.mock('react-plotly.js', () => () => null); // Mock Plotly
-          jest.mock('@mui/material', () => ({
-            ...jest.requireActual('@mui/material'),
-            AppBar: jest.fn(() => <div />),
-            Toolbar: jest.fn(() => <div />),
-            Typography: jest.fn(() => <div />),
-            Drawer: jest.fn(() => <div />),
-            List: jest.fn(() => <div />),
-            ListItem: jest.fn(() => <div />),
-            ListItemIcon: jest.fn(() => <div />),
-            ListItemText: jest.fn(() => <div />),
-            IconButton: jest.fn(() => <div />),
-            CssBaseline: jest.fn(() => <div />),
-            Box: jest.fn(() => <div />),
-            Slider: jest.fn(() => <div />),
-            FormControl: jest.fn(() => <div />),
-            FormLabel: jest.fn(() => <div />),
-            Switch: jest.fn(() => <div />),
-            Select: jest.fn(() => <div />),
-            MenuItem: jest.fn(() => <div />),
-            Divider: jest.fn(() => <div />),
-            ThemeProvider: jest.fn(({ children }) => children),
-            useTheme: jest.fn(() => ({ zIndex: { drawer: 1200 } })),
-          })); // Mock MUI components
+          jest.mock('react-plotly.js', () => ({
+            default: jest.fn(() => <div data-testid="plotly-mock" />), // Mock with a testable div
+          }));
 
           // Simple test to ensure Jest runs
           describe('Basic Jest Test', () => {
@@ -293,7 +272,10 @@ jobs:
             });
 
             test('renders login form when not authenticated', async () => {
-              jest.spyOn(React, 'useState').mockImplementation((init) => [init, jest.fn()]);
+              jest.spyOn(React, 'useState').mockImplementation((init) => [
+                init === null ? { apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' } : init,
+                jest.fn(),
+              ]);
               jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
 
               render(<App />);
@@ -313,7 +295,7 @@ jobs:
                 if (init === true || init === false) return [init, jest.fn()]; // isRegistering, darkMode, isLoading, historicalMode, normalize, drawerOpen
                 if (typeof init === 'number') return [init, jest.fn()]; // timeSteps, historicalHours
                 if (init === 'Jet' || init === 'Greys') return [init, jest.fn()]; // colorScale
-                return [init, jest.fn()]; // default for serverUrls, encryptionKey, error
+                return [{ apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' }, jest.fn()]; // serverUrls, encryptionKey, error
               });
               jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
 
