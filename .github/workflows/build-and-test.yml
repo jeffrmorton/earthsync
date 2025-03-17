@@ -220,11 +220,14 @@ jobs:
           cat << 'CLIENT_TEST_EOF' > src/App.test.js
           import React from 'react';
           import { render, screen, waitFor } from '@testing-library/react';
-          import '@testing-library/jest-dom'; // Add this for better assertions
+          import '@testing-library/jest-dom'; // Better assertions
           import App from './App';
           import axios from 'axios';
 
+          // Mock dependencies
           jest.mock('axios');
+          jest.mock('lodash.debounce', () => jest.fn((fn) => fn));
+          jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
 
           // Factory to mock useState dynamically
           const mockUseState = (initialValues) => {
@@ -235,6 +238,9 @@ jobs:
               return [value, jest.fn()];
             });
           };
+
+          // Define WebSocket states manually
+          const WEBSOCKET_OPEN = 1;
 
           describe('App Component', () => {
             let mockWebSocket;
@@ -257,7 +263,7 @@ jobs:
                 onerror: jest.fn(),
                 onclose: jest.fn(),
                 close: jest.fn(),
-                readyState: WebSocket.OPEN,
+                readyState: WEBSOCKET_OPEN,
               };
               global.WebSocket = jest.fn(() => {
                 setTimeout(() => mockWebSocket.onopen(), 0); // Simulate async open

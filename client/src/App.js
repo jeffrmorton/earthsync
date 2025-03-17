@@ -147,8 +147,9 @@ function App() {
         {error && <Typography color="error">{error}</Typography>}
         <form onSubmit={isRegistering ? handleRegister : handleLogin}>
           <Box sx={{ mb: 2 }}>
-            <FormLabel>Username</FormLabel>
+            <FormLabel htmlFor="username-input">Username</FormLabel>
             <input
+              id="username-input"
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -157,8 +158,9 @@ function App() {
             />
           </Box>
           <Box sx={{ mb: 2 }}>
-            <FormLabel>Password</FormLabel>
+            <FormLabel htmlFor="password-input">Password</FormLabel>
             <input
+              id="password-input"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
