@@ -232,13 +232,11 @@ jobs:
           jest.mock('lodash.debounce', () => jest.fn((fn) => fn));
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
           jest.mock('react-plotly.js', () => jest.fn(() => <div data-testid="plotly-mock">Schumann Resonance 3D Surface Plot</div>));
-
-          console.log('DEBUG: Starting test suite setup');
+          jest.useFakeTimers(); // Use fake timers to control async behavior
 
           // Simple test to ensure Jest runs
           describe('Basic Jest Test', () => {
             test('Jest is running', () => {
-              console.log('DEBUG: Running basic Jest test');
               expect(true).toBe(true);
             });
           });
@@ -246,14 +244,11 @@ jobs:
           // App component tests
           describe('App Component', () => {
             beforeAll(() => {
-              console.log('DEBUG: Entering beforeAll');
               axios.get.mockResolvedValue({ status: 200 });
               axios.post.mockResolvedValue({ status: 200, data: { key: 'mock-key' } });
-              console.log('DEBUG: Exiting beforeAll');
             });
 
             beforeEach(() => {
-              console.log('DEBUG: Entering beforeEach');
               jest.spyOn(console, 'log').mockImplementation(() => {});
               jest.spyOn(console, 'error').mockImplementation((msg) => console.log(`Mocked error: ${msg}`));
               global.WebSocket = jest.fn(() => ({
@@ -264,22 +259,19 @@ jobs:
                 close: jest.fn(),
                 readyState: 1,
               }));
-              console.log('DEBUG: Exiting beforeEach');
             });
 
             afterEach(() => {
-              console.log('DEBUG: Entering afterEach');
               localStorage.clear();
               jest.clearAllMocks();
               console.log.mockRestore();
               console.error.mockRestore();
               delete global.WebSocket;
-              jest.restoreAllMocks();
-              console.log('DEBUG: Exiting afterEach');
+              jest.runOnlyPendingTimers(); // Run pending timers
+              jest.useRealTimers(); // Restore real timers
             });
 
             test('renders login form when not authenticated', async () => {
-              console.log('DEBUG: Starting login form test');
               jest.spyOn(React, 'useState').mockImplementation((init) => [
                 init === null ? { apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' } : init,
                 jest.fn(),
@@ -287,17 +279,14 @@ jobs:
               jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
 
               render(<App />);
-              console.log('DEBUG: Waiting for login form elements');
               await waitFor(() => {
                 expect(screen.getByRole('heading', { name: 'Login', level: 4 })).toBeInTheDocument();
                 expect(screen.getByLabelText('Username')).toBeInTheDocument();
                 expect(screen.getByLabelText('Password')).toBeInTheDocument();
-                console.log('DEBUG: Login form test completed');
               }, { timeout: 2000 });
             }, 5000);
 
             test('shows spectrogram page after login', async () => {
-              console.log('DEBUG: Starting spectrogram page test');
               jest.spyOn(React, 'useState').mockImplementation((init) => {
                 if (init === false) return [true, jest.fn()]; // isAuthenticated
                 if (init === null) return ['mock-token', jest.fn()]; // token
@@ -315,10 +304,8 @@ jobs:
 
               localStorage.setItem('token', 'mock-token');
               render(<App />);
-              console.log('DEBUG: Waiting for spectrogram page elements');
               await waitFor(() => {
                 expect(screen.getByText(/Schumann Resonance 3D Surface Plot/i)).toBeInTheDocument();
-                console.log('DEBUG: Spectrogram page test completed');
               }, { timeout: 2000 });
             }, 5000);
           });
