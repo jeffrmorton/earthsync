@@ -231,14 +231,34 @@ jobs:
           jest.mock('axios');
           jest.mock('lodash.debounce', () => jest.fn((fn) => fn));
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
-          jest.mock('react-plotly.js', () => () => null); // Mock Plotly to reduce rendering time
-
-          console.log('DEBUG: Starting test suite setup');
+          jest.mock('react-plotly.js', () => () => null); // Mock Plotly
+          jest.mock('@mui/material', () => ({
+            ...jest.requireActual('@mui/material'),
+            AppBar: jest.fn(() => <div />),
+            Toolbar: jest.fn(() => <div />),
+            Typography: jest.fn(() => <div />),
+            Drawer: jest.fn(() => <div />),
+            List: jest.fn(() => <div />),
+            ListItem: jest.fn(() => <div />),
+            ListItemIcon: jest.fn(() => <div />),
+            ListItemText: jest.fn(() => <div />),
+            IconButton: jest.fn(() => <div />),
+            CssBaseline: jest.fn(() => <div />),
+            Box: jest.fn(() => <div />),
+            Slider: jest.fn(() => <div />),
+            FormControl: jest.fn(() => <div />),
+            FormLabel: jest.fn(() => <div />),
+            Switch: jest.fn(() => <div />),
+            Select: jest.fn(() => <div />),
+            MenuItem: jest.fn(() => <div />),
+            Divider: jest.fn(() => <div />),
+            ThemeProvider: jest.fn(({ children }) => children),
+            useTheme: jest.fn(() => ({ zIndex: { drawer: 1200 } })),
+          })); // Mock MUI components
 
           // Simple test to ensure Jest runs
           describe('Basic Jest Test', () => {
             test('Jest is running', () => {
-              console.log('DEBUG: Running basic Jest test');
               expect(true).toBe(true);
             });
           });
@@ -246,57 +266,45 @@ jobs:
           // App component tests
           describe('App Component', () => {
             beforeAll(() => {
-              console.log('DEBUG: Entering beforeAll');
               axios.get.mockResolvedValue({ status: 200 });
-              axios.post.mockResolvedValue({ status: 200, data: { key: 'mock-key' } }); // Ensure key is in data
-              console.log('DEBUG: Exiting beforeAll');
+              axios.post.mockResolvedValue({ status: 200, data: { key: 'mock-key' } });
             });
 
             beforeEach(() => {
-              console.log('DEBUG: Entering beforeEach');
               jest.spyOn(console, 'log').mockImplementation(() => {});
-              jest.spyOn(console, 'error').mockImplementation((msg) => {
-                console.log(`Mocked error: ${msg}`); // Log instead of throw for debugging
-              });
+              jest.spyOn(console, 'error').mockImplementation((msg) => console.log(`Mocked error: ${msg}`));
               global.WebSocket = jest.fn(() => ({
                 onopen: jest.fn(),
-                onmessage: jest.fn(() => ({ spectrogram: [[1, 2, 3]] })), // Mock a valid message
+                onmessage: jest.fn(() => ({ spectrogram: [[1, 2, 3]] })),
                 onerror: jest.fn(),
                 onclose: jest.fn(),
                 close: jest.fn(),
-                readyState: 1, // WEBSOCKET_OPEN
+                readyState: 1,
               }));
-              console.log('DEBUG: Exiting beforeEach');
             });
 
             afterEach(() => {
-              console.log('DEBUG: Entering afterEach');
               localStorage.clear();
               jest.clearAllMocks();
               console.log.mockRestore();
               console.error.mockRestore();
               delete global.WebSocket;
               jest.restoreAllMocks();
-              console.log('DEBUG: Exiting afterEach');
             });
 
             test('renders login form when not authenticated', async () => {
-              console.log('DEBUG: Starting login form test');
               jest.spyOn(React, 'useState').mockImplementation((init) => [init, jest.fn()]);
               jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
 
               render(<App />);
-              console.log('DEBUG: Waiting for login form elements');
               await waitFor(() => {
                 expect(screen.getByRole('heading', { name: 'Login', level: 4 })).toBeInTheDocument();
                 expect(screen.getByLabelText('Username')).toBeInTheDocument();
                 expect(screen.getByLabelText('Password')).toBeInTheDocument();
-                console.log('DEBUG: Login form test completed');
               }, { timeout: 2000 });
             }, 5000);
 
             test('shows spectrogram page after login', async () => {
-              console.log('DEBUG: Starting spectrogram page test');
               jest.spyOn(React, 'useState').mockImplementation((init) => {
                 if (init === false) return [true, jest.fn()]; // isAuthenticated
                 if (init === null) return ['mock-token', jest.fn()]; // token
@@ -311,10 +319,8 @@ jobs:
 
               localStorage.setItem('token', 'mock-token');
               render(<App />);
-              console.log('DEBUG: Waiting for spectrogram page elements');
               await waitFor(() => {
                 expect(screen.getByText(/Schumann Resonance 3D Surface Plot/i)).toBeInTheDocument();
-                console.log('DEBUG: Spectrogram page test completed');
               }, { timeout: 2000 });
             }, 5000);
           });
