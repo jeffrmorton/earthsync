@@ -19,16 +19,5 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test"
-  },
-  "devDependencies": {
-    "@testing-library/jest-dom": "^6.5.0",
-    "@testing-library/react": "^16.0.1",
-    "jest": "^29.7.0",
-    "canvas": "^2.11.2"
-  },
-  "jest": {
-    "transformIgnorePatterns": [
-      "/node_modules/(?!axios|crypto-js|react-plotly.js|lodash.debounce|lodash.throttle|@mui|@emotion|plotly.js)/"
-    ]
   }
 }
