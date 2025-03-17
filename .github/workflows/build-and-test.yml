@@ -218,6 +218,7 @@ jobs:
           cd client
           npm install
           cat << 'CLIENT_TEST_EOF' > src/App.test.js
+          import React from 'react';
           import { render, screen, waitFor } from '@testing-library/react';
           import App from './App';
           import axios from 'axios';
@@ -257,7 +258,7 @@ jobs:
               render(<App />);
               console.log('Test 1: Waiting for login form...');
               await waitFor(() => {
-                expect(screen.getByText('Login')).toBeInTheDocument();
+                expect(screen.getByRole('heading', { name: 'Login', level: 4 })).toBeInTheDocument();
                 expect(screen.getByLabelText('Username')).toBeInTheDocument();
                 expect(screen.getByLabelText('Password')).toBeInTheDocument();
                 console.log('Test 1: Login form rendered successfully');
