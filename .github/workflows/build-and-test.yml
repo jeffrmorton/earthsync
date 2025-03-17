@@ -233,12 +233,30 @@ jobs:
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
           jest.mock('react-plotly.js', () => jest.fn(() => <div data-testid="plotly-mock">Schumann Resonance 3D Surface Plot</div>));
 
-          // Mock minimal MUI components
-          jest.mock('@mui/material/Typography', () => ({
-            default: jest.fn(({ children }) => <div>{children}</div>),
-          }));
-          jest.mock('@mui/material/FormLabel', () => ({
-            default: jest.fn(({ children }) => <label>{children}</label>),
+          // Mock MUI components comprehensively
+          jest.mock('@mui/material', () => ({
+            AppBar: jest.fn(({ children }) => <div>{children}</div>),
+            Toolbar: jest.fn(({ children }) => <div>{children}</div>),
+            Typography: jest.fn(({ children }) => <div>{children}</div>),
+            Drawer: jest.fn(({ children }) => <div>{children}</div>),
+            List: jest.fn(({ children }) => <div>{children}</div>),
+            ListItem: jest.fn(({ children }) => <div>{children}</div>),
+            ListItemIcon: jest.fn(({ children }) => <div>{children}</div>),
+            ListItemText: jest.fn(({ children }) => <div>{children}</div>),
+            IconButton: jest.fn(({ children }) => <button>{children}</button>),
+            CssBaseline: jest.fn(() => null),
+            Box: jest.fn(({ children }) => <div>{children}</div>),
+            Slider: jest.fn(() => <input type="range" />),
+            FormControl: jest.fn(({ children }) => <div>{children}</div>),
+            FormLabel: jest.fn(({ children }) => <label>{children}</label>),
+            Switch: jest.fn(() => <input type="checkbox" />),
+            useTheme: jest.fn(() => ({ zIndex: { drawer: 1200 } })),
+            ThemeProvider: jest.fn(({ children }) => <div>{children}</div>),
+            createTheme: jest.fn(() => ({})),
+            Select: jest.fn(({ children }) => <select>{children}</select>),
+            MenuItem: jest.fn(({ children }) => <option>{children}</option>),
+            Divider: jest.fn(() => <hr />),
+            CardHeader: jest.fn(({ children }) => <div>{children}</div>),
           }));
 
           // Use fake timers per test
