@@ -232,9 +232,16 @@ jobs:
           jest.mock('lodash.debounce', () => jest.fn((fn) => fn));
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
           jest.mock('react-plotly.js', () => jest.fn(() => <div data-testid="plotly-mock">Schumann Resonance 3D Surface Plot</div>));
-          jest.useFakeTimers(); // Use fake timers to control async behavior
 
-          // Simple test to ensure Jest runs
+          // Mock minimal MUI components
+          jest.mock('@mui/material/Typography', () => ({
+            default: jest.fn(({ children }) => <div>{children}</div>),
+          }));
+          jest.mock('@mui/material/FormLabel', () => ({
+            default: jest.fn(({ children }) => <label>{children}</label>),
+          }));
+
+          // Use fake timers per test
           describe('Basic Jest Test', () => {
             test('Jest is running', () => {
               expect(true).toBe(true);
@@ -249,6 +256,7 @@ jobs:
             });
 
             beforeEach(() => {
+              jest.useFakeTimers(); // Enable fake timers for this test
               jest.spyOn(console, 'log').mockImplementation(() => {});
               jest.spyOn(console, 'error').mockImplementation((msg) => console.log(`Mocked error: ${msg}`));
               global.WebSocket = jest.fn(() => ({
@@ -267,7 +275,7 @@ jobs:
               console.log.mockRestore();
               console.error.mockRestore();
               delete global.WebSocket;
-              jest.runOnlyPendingTimers(); // Run pending timers
+              jest.runOnlyPendingTimers(); // Run any pending timers
               jest.useRealTimers(); // Restore real timers
             });
 
