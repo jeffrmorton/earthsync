@@ -233,31 +233,38 @@ jobs:
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
           jest.mock('react-plotly.js', () => jest.fn(() => <div data-testid="plotly-mock">Schumann Resonance 3D Surface Plot</div>));
 
-          // Mock MUI components comprehensively
-          jest.mock('@mui/material', () => ({
-            AppBar: jest.fn(({ children }) => <div>{children}</div>),
-            Toolbar: jest.fn(({ children }) => <div>{children}</div>),
-            Typography: jest.fn(({ children }) => <div>{children}</div>),
-            Drawer: jest.fn(({ children }) => <div>{children}</div>),
-            List: jest.fn(({ children }) => <div>{children}</div>),
-            ListItem: jest.fn(({ children }) => <div>{children}</div>),
-            ListItemIcon: jest.fn(({ children }) => <div>{children}</div>),
-            ListItemText: jest.fn(({ children }) => <div>{children}</div>),
-            IconButton: jest.fn(({ children }) => <button>{children}</button>),
-            CssBaseline: jest.fn(() => null),
-            Box: jest.fn(({ children }) => <div>{children}</div>),
-            Slider: jest.fn(() => <input type="range" />),
-            FormControl: jest.fn(({ children }) => <div>{children}</div>),
-            FormLabel: jest.fn(({ children }) => <label>{children}</label>),
-            Switch: jest.fn(() => <input type="checkbox" />),
-            useTheme: jest.fn(() => ({ zIndex: { drawer: 1200 } })),
-            ThemeProvider: jest.fn(({ children }) => <div>{children}</div>),
-            createTheme: jest.fn(() => ({})),
-            Select: jest.fn(({ children }) => <select>{children}</select>),
-            MenuItem: jest.fn(({ children }) => <option>{children}</option>),
-            Divider: jest.fn(() => <hr />),
-            CardHeader: jest.fn(({ children }) => <div>{children}</div>),
-          }));
+          // Mock MUI components comprehensively with proper prop handling
+          jest.mock('@mui/material', () => {
+            const originalModule = jest.requireActual('@mui/material');
+            return {
+              ...originalModule,
+              AppBar: jest.fn(({ children }) => <div>{children}</div>),
+              Toolbar: jest.fn(({ children }) => <div>{children}</div>),
+              Typography: jest.fn(({ children, variant, ...props }) => {
+                if (variant === 'h4') return <h4 {...props}>{children}</h4>;
+                return <div {...props}>{children}</div>;
+              }),
+              Drawer: jest.fn(({ children }) => <div>{children}</div>),
+              List: jest.fn(({ children }) => <div>{children}</div>),
+              ListItem: jest.fn(({ children }) => <div>{children}</div>),
+              ListItemIcon: jest.fn(({ children }) => <div>{children}</div>),
+              ListItemText: jest.fn(({ children }) => <div>{children}</div>),
+              IconButton: jest.fn(({ children }) => <button>{children}</button>),
+              CssBaseline: jest.fn(() => null),
+              Box: jest.fn(({ children }) => <div>{children}</div>),
+              Slider: jest.fn(() => <input type="range" />),
+              FormControl: jest.fn(({ children }) => <div>{children}</div>),
+              FormLabel: jest.fn(({ children }) => <label>{children}</label>),
+              Switch: jest.fn(() => <input type="checkbox" />),
+              useTheme: jest.fn(() => ({ zIndex: { drawer: 1200 }, palette: { mode: 'light' } })),
+              ThemeProvider: jest.fn(({ children }) => <div>{children}</div>),
+              createTheme: jest.fn(() => ({ palette: { mode: 'light' } })),
+              Select: jest.fn(({ children }) => <select>{children}</select>),
+              MenuItem: jest.fn(({ children }) => <option>{children}</option>),
+              Divider: jest.fn(() => <hr />),
+              CardHeader: jest.fn(({ children }) => <div>{children}</div>),
+            };
+          });
 
           // Use fake timers per test
           describe('Basic Jest Test', () => {
@@ -299,7 +306,7 @@ jobs:
 
             test('renders login form when not authenticated', async () => {
               jest.spyOn(React, 'useState').mockImplementation((init) => [
-                init === null ? { apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' } : init,
+                init === false ? false : init === null ? { apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' } : init,
                 jest.fn(),
               ]);
               jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
