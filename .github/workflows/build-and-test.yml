@@ -239,7 +239,7 @@ jobs:
             });
           });
 
-          // Minimal App component tests
+          // App component tests
           describe('App Component', () => {
             beforeAll(() => {
               console.log('DEBUG: Entering beforeAll');
@@ -288,6 +288,24 @@ jobs:
                 expect(screen.getByLabelText('Username')).toBeInTheDocument();
                 expect(screen.getByLabelText('Password')).toBeInTheDocument();
                 console.log('DEBUG: Login form test completed');
+              }, { timeout: 2000 });
+            }, 5000);
+
+            test('shows spectrogram page after login', async () => {
+              console.log('DEBUG: Starting spectrogram page test');
+              jest.spyOn(React, 'useState').mockImplementation((init) => {
+                if (init === false) return [true, jest.fn()]; // isAuthenticated
+                if (init === null) return ['mock-token', jest.fn()]; // token
+                return [init, jest.fn()];
+              });
+              jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
+
+              localStorage.setItem('token', 'mock-token');
+              render(<App />);
+              console.log('DEBUG: Waiting for spectrogram page elements');
+              await waitFor(() => {
+                expect(screen.getByText(/Schumann Resonance 3D Surface Plot/i)).toBeInTheDocument();
+                console.log('DEBUG: Spectrogram page test completed');
               }, { timeout: 2000 });
             }, 5000);
           });
