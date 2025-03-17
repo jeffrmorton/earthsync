@@ -231,9 +231,7 @@ jobs:
           jest.mock('axios');
           jest.mock('lodash.debounce', () => jest.fn((fn) => fn));
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
-          jest.mock('react-plotly.js', () => ({
-            default: jest.fn(() => <div data-testid="plotly-mock" />), // Mock with a testable div
-          }));
+          jest.mock('react-plotly.js', () => jest.fn(() => <div data-testid="plotly-mock" />)); // Direct function mock
 
           // Simple test to ensure Jest runs
           describe('Basic Jest Test', () => {
@@ -295,9 +293,12 @@ jobs:
                 if (init === true || init === false) return [init, jest.fn()]; // isRegistering, darkMode, isLoading, historicalMode, normalize, drawerOpen
                 if (typeof init === 'number') return [init, jest.fn()]; // timeSteps, historicalHours
                 if (init === 'Jet' || init === 'Greys') return [init, jest.fn()]; // colorScale
-                return [{ apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' }, jest.fn()]; // serverUrls, encryptionKey, error
+                return [{ apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' }, jest.fn()]; // serverUrls
               });
-              jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
+              jest.spyOn(React, 'useEffect').mockImplementation((fn) => {
+                fn(); // Ensure useEffect runs immediately
+                return () => {}; // Cleanup mock
+              });
 
               localStorage.setItem('token', 'mock-token');
               render(<App />);
