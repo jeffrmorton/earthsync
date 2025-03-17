@@ -284,7 +284,9 @@ jobs:
               render(<App />);
               console.log('DEBUG: Waiting for login form elements');
               await waitFor(() => {
-                expect(screen.getByText('Login')).toBeInTheDocument();
+                expect(screen.getByRole('heading', { name: 'Login', level: 4 })).toBeInTheDocument();
+                expect(screen.getByLabelText('Username')).toBeInTheDocument();
+                expect(screen.getByLabelText('Password')).toBeInTheDocument();
                 console.log('DEBUG: Login form test completed');
               }, { timeout: 2000 });
             }, 5000);
