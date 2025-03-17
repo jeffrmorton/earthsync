@@ -33,6 +33,9 @@ jobs:
 
       - name: Build and run services with Docker Compose
         run: |
+          # Verify docker-compose.yml content
+          echo "Verifying docker-compose.yml..."
+          grep -A 5 "healthcheck:" "$GITHUB_WORKSPACE/earthsync/docker-compose.yml" || echo "Healthcheck section not found or malformed"
           docker compose up -d --build
         continue-on-error: false
 
@@ -228,6 +231,7 @@ jobs:
           jest.mock('axios');
           jest.mock('lodash.debounce', () => jest.fn((fn) => fn));
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
+          jest.mock('react-plotly.js', () => () => null); // Mock Plotly to reduce rendering time
 
           console.log('DEBUG: Starting test suite setup');
 
@@ -316,5 +320,8 @@ jobs:
       - name: Clean up
         if: always()
         run: |
+          # Verify docker-compose.yml content before cleanup
+          echo "Verifying docker-compose.yml before cleanup..."
+          grep -A 5 "healthcheck:" "$GITHUB_WORKSPACE/earthsync/docker-compose.yml" || echo "Healthcheck section not found or malformed"
           docker compose down -v
         continue-on-error: false
