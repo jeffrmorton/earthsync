@@ -231,7 +231,8 @@ jobs:
           jest.mock('axios');
           jest.mock('lodash.debounce', () => jest.fn((fn) => fn));
           jest.mock('lodash.throttle', () => jest.fn((fn) => fn));
-          jest.mock('react-plotly.js', () => jest.fn(() => <div data-testid="plotly-mock" />)); // Direct function mock
+          jest.mock('react-plotly.js', () => jest.fn(() => <div data-testid="plotly-mock">Schumann Resonance 3D Surface Plot</div>)); // Include text for test
+          jest.spyOn(global, 'setTimeout'); // Mock timers to prevent lingering async
 
           // Simple test to ensure Jest runs
           describe('Basic Jest Test', () => {
@@ -267,6 +268,7 @@ jobs:
               console.error.mockRestore();
               delete global.WebSocket;
               jest.restoreAllMocks();
+              jest.clearAllTimers(); // Clear any lingering timers
             });
 
             test('renders login form when not authenticated', async () => {
@@ -308,7 +310,7 @@ jobs:
             }, 5000);
           });
           CLIENT_TEST_EOF
-          npm test -- --forceExit --verbose
+          npm test -- --forceExit --detectOpenHandles
         continue-on-error: false
 
       - name: Clean up
