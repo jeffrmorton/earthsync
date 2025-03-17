@@ -1,6 +1,6 @@
 /**
  * Main server entry point for EarthSync.
- * Handles API requests, WebSocket connections, and data processing.
+ * Handles API requests, WebSocket connections, and data processing with caching and downsampling.
  */
 require('dotenv').config();
 const express = require('express');
@@ -17,7 +17,7 @@ const WebSocket = require('ws');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const promClient = require('prom-client');
-const http = require('http'); // Changed from https
+const http = require('http');
 
 const register = new promClient.Registry();
 promClient.collectDefaultMetrics({ register });
@@ -63,6 +63,7 @@ if (!JWT_SECRET) {
 }
 
 const CLEANUP_INTERVAL_MS = parseInt(process.env.CLEANUP_INTERVAL_MS, 10) || 60 * 60 * 1000;
+const DOWNSAMPLE_FACTOR = parseInt(process.env.DOWNSAMPLE_FACTOR, 10) || 5; // Downsample to 1/5th of original resolution
 
 process.on('uncaughtException', (err) => {
   logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
@@ -109,6 +110,12 @@ function encryptMessage(message, key) {
   let encrypted = cipher.update(message, 'utf8', 'base64');
   encrypted += cipher.final('base64');
   return `${encrypted}:${iv.toString('base64')}`;
+}
+
+// Downsample spectrogram data
+function downsampleSpectrogram(spectrogram) {
+  if (!Array.isArray(spectrogram) || spectrogram.length === 0) return [];
+  return spectrogram.filter((_, i) => i % DOWNSAMPLE_FACTOR === 0);
 }
 
 const userKeys = new Map();
@@ -227,10 +234,19 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     const hours = parseInt(req.params.hours, 10);
     if (isNaN(hours) || hours < 1 || hours > 24) return res.status(400).json({ error: 'Invalid hours' });
 
+    const cacheKey = `history:${hours}`;
     try {
+      // Check cache first
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        logger.info('Serving history from cache', { hours });
+        return res.json(JSON.parse(cached));
+      }
+
       const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
       const records = await redisClient.lrange('spectrogram_history', 0, -1);
-      logger.info('Raw records from Redis:', records);
+      logger.info('Raw records from Redis:', { count: records.length });
+
       const filteredRecords = records.filter(record => {
         try {
           const parsed = JSON.parse(record);
@@ -245,7 +261,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
         try {
           const parsed = JSON.parse(record);
           if (!Array.isArray(parsed.spectrogram)) throw new Error('Invalid spectrogram');
-          return parsed.spectrogram;
+          return downsampleSpectrogram(parsed.spectrogram); // Downsample before sending
         } catch (err) {
           logger.error('Malformed spectrogram record', { error: err.message, record });
           return [];
@@ -256,7 +272,10 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
         logger.warn('No valid historical data found within the time range');
         return res.status(200).json([]);
       }
-      logger.info('Processed spectrograms:', spectrograms);
+
+      logger.info('Processed spectrograms', { count: spectrograms.length });
+      // Cache the result for 5 minutes (300 seconds)
+      await redisClient.setex(cacheKey, 300, JSON.stringify(spectrograms));
       res.json(spectrograms);
     } catch (err) {
       logger.error('History fetch error', { error: err.message });
@@ -330,13 +349,21 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
               if (!parsedMessage.spectrogram || !parsedMessage.timestamp || !parsedMessage.interval) {
                 throw new Error('Missing message fields');
               }
-              redisClient.lpush('spectrogram_history', message);
+              // Downsample spectrogram data before storing and sending
+              const downsampledSpectrogram = parsedMessage.spectrogram.map(downsampleSpectrogram);
+              const downsampledMessage = {
+                spectrogram: downsampledSpectrogram,
+                timestamp: parsedMessage.timestamp,
+                interval: parsedMessage.interval
+              };
+              const messageString = JSON.stringify(downsampledMessage);
+              redisClient.lpush('spectrogram_history', messageString);
               redisClient.ltrim('spectrogram_history', 0, 999);
 
               wss.clients.forEach((ws) => {
                 if (ws.readyState === WebSocket.OPEN && userKeys.has(ws.user.username)) {
                   const key = userKeys.get(ws.user.username);
-                  const encryptedMessage = encryptMessage(message, key);
+                  const encryptedMessage = encryptMessage(messageString, key);
                   ws.send(encryptedMessage);
                 }
               });

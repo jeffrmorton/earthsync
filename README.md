@@ -9,13 +9,14 @@ The server API is documented using OpenAPI 3.0. See `server/openapi.yaml` for th
 ## Features
 - Real-time 3D visualization of Schumann Resonance with labeled axes (Frequency, Time, Amplitude).
 - User authentication (register/login).
-- Historical data retrieval.
+- Historical data retrieval with server-side caching (5-minute TTL).
 - Adjustable time windows, color scales, and normalization.
 - Configurable log levels via environment variables.
 - Monitoring with Prometheus and Grafana (HTTP requests, WebSocket connections, Redis queue length).
 - CI/CD pipeline with GitHub Actions.
 - Dockerized deployment with healthchecks.
 - HTTP support for development (HTTPS can be enabled with proper certificates).
+- Performance optimizations: server-side downsampling (configurable factor, default 5) and caching for historical data.
 
 ## Prerequisites
 - Docker
@@ -54,6 +55,7 @@ Edit `.env` files in `client`, `server`, and `detector` directories to configure
 - `DETECTOR_BATCH_SIZE`: Number of spectrograms per batch (default: 2)
 - `LOG_LEVEL`: Log level (e.g., `error`, `warn`, `info`, `debug`, default: `info`)
 - `CLEANUP_INTERVAL_MS`: Server cleanup interval for Redis history (ms, default: 3600000)
+- `DOWNSAMPLE_FACTOR`: Factor for server-side spectrogram downsampling (default: 5, reducing 5501 points to ~1100)
 
 ## Resource Limits
 Docker Compose sets the following resource limits (adjust in `docker-compose.yml` as needed):
