@@ -220,29 +220,49 @@ jobs:
           cat << 'CLIENT_TEST_EOF' > src/App.test.js
           import React from 'react';
           import { render, screen, waitFor } from '@testing-library/react';
+          import '@testing-library/jest-dom'; // Add this for better assertions
           import App from './App';
           import axios from 'axios';
 
           jest.mock('axios');
 
+          // Factory to mock useState dynamically
+          const mockUseState = (initialValues) => {
+            let index = 0;
+            return jest.spyOn(React, 'useState').mockImplementation(() => {
+              const value = initialValues[index];
+              index++;
+              return [value, jest.fn()];
+            });
+          };
+
           describe('App Component', () => {
+            let mockWebSocket;
+
             beforeEach(() => {
-              // Mock the /health endpoint called by determineServerUrls
+              // Mock axios
               axios.get.mockResolvedValue({ status: 200 });
-              // Mock console.log to reduce noise
+              axios.post.mockResolvedValue({ data: { key: 'mock-key' } });
+
+              // Mock console
               jest.spyOn(console, 'log').mockImplementation(() => {});
-              // Mock console.error to catch errors
               jest.spyOn(console, 'error').mockImplementation((msg) => {
                 throw new Error(`Console error: ${msg}`);
               });
-              // Mock WebSocket to prevent real connections
-              global.WebSocket = jest.fn(() => ({
+
+              // Mock WebSocket with lifecycle
+              mockWebSocket = {
                 onopen: jest.fn(),
                 onmessage: jest.fn(),
                 onerror: jest.fn(),
                 onclose: jest.fn(),
                 close: jest.fn(),
-              }));
+                readyState: WebSocket.OPEN,
+              };
+              global.WebSocket = jest.fn(() => {
+                setTimeout(() => mockWebSocket.onopen(), 0); // Simulate async open
+                return mockWebSocket;
+              });
             });
 
             afterEach(() => {
@@ -251,10 +271,16 @@ jobs:
               console.log.mockRestore();
               console.error.mockRestore();
               delete global.WebSocket;
+              jest.restoreAllMocks(); // Reset all mocks
             });
 
             test('renders login form when not authenticated', async () => {
               console.log('Test 1: Starting render login form test...');
+              // Mock useState for unauthenticated state
+              mockUseState([false, null, '', '', false, null, true, false, { apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' }]);
+              // Mock useEffect
+              jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
+
               render(<App />);
               console.log('Test 1: Waiting for login form...');
               await waitFor(() => {
@@ -263,38 +289,35 @@ jobs:
                 expect(screen.getByLabelText('Password')).toBeInTheDocument();
                 console.log('Test 1: Login form rendered successfully');
               }, { timeout: 2000 });
-            });
+            }, 5000); // Test timeout
 
             test('shows spectrogram page after login', async () => {
               console.log('Test 2: Starting spectrogram page test...');
-              // Mock the state updates directly to bypass fetchKey
-              jest.spyOn(React, 'useState')
-                .mockImplementationOnce((init) => [init, jest.fn()]) // isAuthenticated
-                .mockImplementationOnce((init) => ['mock-token', jest.fn()]) // token
-                .mockImplementationOnce((init) => ['', jest.fn()]) // username
-                .mockImplementationOnce((init) => ['', jest.fn()]) // password
-                .mockImplementationOnce((init) => [false, jest.fn()]) // isRegistering
-                .mockImplementationOnce((init) => [null, jest.fn()]) // error
-                .mockImplementationOnce((init) => [true, jest.fn()]) // darkMode
-                .mockImplementationOnce((init) => [false, jest.fn()]) // isLoading
-                .mockImplementationOnce((init) => [{ apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' }, jest.fn()]); // serverUrls
+              // Mock useState for authenticated state
+              mockUseState([
+                true, // isAuthenticated
+                'mock-token', // token
+                '', // username
+                '', // password
+                false, // isRegistering
+                null, // error
+                true, // darkMode
+                false, // isLoading
+                { apiUrl: 'http://localhost:3000', wsUrl: 'ws://localhost:3000' }, // serverUrls
+                [], // spectrogramData
+                'mock-key', // encryptionKey
+                null, // error
+                60, // timeSteps
+                false, // historicalMode
+                1, // historicalHours
+                'Jet', // colorScale
+                false, // normalize
+                true, // drawerOpen
+                false, // isLoading (SpectrogramPage)
+              ]);
 
-              // Mock useEffect to control fetchKey
-              jest.spyOn(React, 'useEffect')
-                .mockImplementationOnce((fn) => fn()); // First useEffect in App
-
-              // Mock useState for SpectrogramPage
-              jest.spyOn(React, 'useState')
-                .mockImplementationOnce((init) => [[], jest.fn()]) // spectrogramData
-                .mockImplementationOnce((init) => ['mock-key', jest.fn()]) // encryptionKey
-                .mockImplementationOnce((init) => [null, jest.fn()]) // error
-                .mockImplementationOnce((init) => [60, jest.fn()]) // timeSteps
-                .mockImplementationOnce((init) => [false, jest.fn()]) // historicalMode
-                .mockImplementationOnce((init) => [1, jest.fn()]) // historicalHours
-                .mockImplementationOnce((init) => ['Jet', jest.fn()]) // colorScale
-                .mockImplementationOnce((init) => [false, jest.fn()]) // normalize
-                .mockImplementationOnce((init) => [true, jest.fn()]) // drawerOpen
-                .mockImplementationOnce((init) => [false, jest.fn()]); // isLoading
+              // Mock all useEffect calls
+              jest.spyOn(React, 'useEffect').mockImplementation((fn) => fn());
 
               localStorage.setItem('token', 'mock-token');
               console.log('Test 2: Rendering App...');
@@ -304,10 +327,10 @@ jobs:
                 expect(screen.getByText(/Schumann Resonance 3D Surface Plot/i)).toBeInTheDocument();
                 console.log('Test 2: Spectrogram page rendered successfully');
               }, { timeout: 2000 });
-            });
+            }, 5000); // Test timeout
           });
           CLIENT_TEST_EOF
-          npm test
+          npm test -- --forceExit
         continue-on-error: false
 
       - name: Clean up

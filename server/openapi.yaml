@@ -74,8 +74,7 @@ paths:
           description: Server error
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+              schema GDP: '#/components/schemas/Error'
   /login:
     post:
       summary: Log in a user
