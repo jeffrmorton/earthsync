@@ -64,7 +64,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          npm install axios ws ioredis bcryptjs jsonwebtoken jest --save-dev
+          npm install axios ws ioredis bcryptjs jsonwebtoken jest crypto-js --save-dev
         continue-on-error: false
 
       - name: Run server and integration tests with multi-detector support and frequency range
@@ -79,6 +79,7 @@ jobs:
           const Redis = require('ioredis');
           const bcrypt = require('bcryptjs');
           const jwt = require('jsonwebtoken');
+          const CryptoJS = require('crypto-js');
 
           const API_BASE_URL = 'http://localhost:3000';
           const WS_URL = 'ws://localhost:3000';
@@ -113,17 +114,13 @@ jobs:
 
           describe('EarthSync API Tests', () => {
             let token;
-            let ws;
+            let key;
 
             beforeAll(async () => {
               await redis.ping();
             });
 
             afterAll(async () => {
-              if (ws && ws.readyState !== WebSocket.CLOSED) {
-                ws.close();
-                await new Promise(resolve => setTimeout(resolve, 5000));
-              }
               await redis.quit();
             }, 15000);
 
@@ -152,11 +149,11 @@ jobs:
               const response = await axios.post(`${API_BASE_URL}/key-exchange`, {}, { headers: { Authorization: `Bearer ${token}` } });
               expect(response.status).toBe(200);
               expect(response.data.key).toBeDefined();
+              key = response.data.key;
             });
 
             test('History with multi-detector data and frequency range', async () => {
-              await redis.del('spectrogram_history:detector1');
-              await redis.del('spectrogram_history:detector2');
+              await redis.keys('spectrogram_history:*').then(keys => redis.del(...keys)); // Clear all history keys
               for (let i = 0; i < 5; i++) {
                 const spectrogram = generateSpectrogram();
                 const timestamp = new Date(Date.now() - (60 - i * 10) * 60 * 1000).toISOString();
@@ -166,16 +163,16 @@ jobs:
               const responseAll = await axios.get(`${API_BASE_URL}/history/1`, { headers: { Authorization: `Bearer ${token}` } });
               expect(responseAll.status).toBe(200);
               expect(Array.isArray(responseAll.data)).toBe(true);
-              expect(responseAll.data.length).toBe(2); // Two detectors
+              expect(responseAll.data.length).toBe(3); // Expect all three detectors from docker-compose
               expect(responseAll.data[0].detectorId).toBeDefined();
               expect(responseAll.data[0].location).toHaveProperty('lat');
               const spectrogram = responseAll.data[0].spectrogram;
-              expect(spectrogram.length).toBeGreaterThan(1000); // Ensure full frequency range is present after downsampling
+              expect(spectrogram.length).toBeGreaterThan(1000); // Ensure full frequency range after downsampling
               expect(Math.max(...spectrogram)).toBeGreaterThan(10); // Verify amplitude spans expected range
             });
 
             test('WebSocket connection with multi-detector data', async () => {
-              ws = new WebSocket(`${WS_URL}/?token=${token}`);
+              const ws = new WebSocket(`${WS_URL}/?token=${token}`);
               await new Promise(resolve => ws.on('open', resolve));
               const messagePromise = new Promise(resolve => ws.on('message', data => resolve(data.toString('utf8'))));
               const spectrogram = generateSpectrogram();
@@ -188,8 +185,13 @@ jobs:
               }));
               const message = await messagePromise;
               expect(message).toContain(':');
-              const decrypted = JSON.parse(message.split(':')[0]); // Simplified decryption for test
-              expect(decrypted.spectrogram.length).toBeGreaterThan(1000); // Verify full frequency range
+              const [encrypted, iv] = message.split(':');
+              const encryptedBuf = CryptoJS.enc.Base64.parse(encrypted);
+              const ivBuf = CryptoJS.enc.Base64.parse(iv);
+              const keyWordArray = CryptoJS.enc.Hex.parse(key);
+              const decrypted = CryptoJS.AES.decrypt({ ciphertext: encryptedBuf }, keyWordArray, { iv: ivBuf, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
+              const decryptedData = JSON.parse(decrypted.toString(CryptoJS.enc.Utf8));
+              expect(decryptedData.spectrogram.length).toBeGreaterThan(1000); // Verify full frequency range
               ws.close();
             });
           });

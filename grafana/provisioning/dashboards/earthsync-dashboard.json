@@ -204,7 +204,7 @@
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
-      "stepedLine": false,
+      "steppedLine": false,
       "targets": [
         {
           "expr": "redis_key_size{key=\"spectrogram_history:detector1\"} or vector(0)",
