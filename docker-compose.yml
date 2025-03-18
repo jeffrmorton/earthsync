@@ -26,7 +26,7 @@ services:
     environment:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=password
-      - REDIS_EXPORTER_CHECK_SINGLE_KEYS=spectrogram_history
+      - REDIS_EXPORTER_CHECK_SINGLE_KEYS=spectrogram_history:detector1,spectrogram_history:detector2,spectrogram_history:detector3
       - REDIS_EXPORTER_DEBUG=true
     ports:
       - "9121:9121"
@@ -77,7 +77,7 @@ services:
       - "3000:3000"
     environment:
       - JWT_SECRET=1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
-      - DOWNSAMPLE_FACTOR=5  # Ensure this is passed explicitly
+      - DOWNSAMPLE_FACTOR=5
     env_file:
       - ./server/.env
     depends_on:
@@ -99,8 +99,52 @@ services:
           memory: 1G
     restart: unless-stopped
 
-  detector:
+  detector1:
     build: ./detector
+    environment:
+      - DETECTOR_ID=detector1
+      - LATITUDE=40.7128  # New York
+      - LONGITUDE=-74.0060
+    env_file:
+      - ./detector/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - earthsync-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+
+  detector2:
+    build: ./detector
+    environment:
+      - DETECTOR_ID=detector2
+      - LATITUDE=51.5074  # London
+      - LONGITUDE=-0.1278
+    env_file:
+      - ./detector/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - earthsync-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+
+  detector3:
+    build: ./detector
+    environment:
+      - DETECTOR_ID=detector3
+      - LATITUDE=-33.8688  # Sydney
+      - LONGITUDE=151.2093
     env_file:
       - ./detector/.env
     depends_on:

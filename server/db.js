@@ -4,14 +4,8 @@ const winston = require('winston');
 const logLevel = process.env.LOG_LEVEL || 'info';
 const logger = winston.createLogger({
   level: logLevel,
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'server.log' })
-  ]
+  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
+  transports: [new winston.transports.Console(), new winston.transports.File({ filename: 'server.log' })]
 });
 
 require('dotenv').config();
@@ -24,7 +18,7 @@ const dbConfig = {
   port: process.env.DB_PORT,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 2000
 };
 
 logger.info('Database configuration', { dbConfig });

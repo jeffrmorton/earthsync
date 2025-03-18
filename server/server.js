@@ -1,6 +1,6 @@
 /**
  * Main server entry point for EarthSync.
- * Handles API requests, WebSocket connections, and data processing with caching and downsampling.
+ * Handles API requests, WebSocket connections, and data processing with multi-detector support.
  */
 require('dotenv').config();
 const express = require('express');
@@ -26,13 +26,13 @@ const httpRequestCounter = new promClient.Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests',
   labelNames: ['method', 'route', 'status'],
-  registers: [register],
+  registers: [register]
 });
 
 const websocketConnections = new promClient.Gauge({
   name: 'websocket_connections_active',
   help: 'Number of active WebSocket connections',
-  registers: [register],
+  registers: [register]
 });
 
 const httpRequestLatency = new promClient.Histogram({
@@ -40,20 +40,14 @@ const httpRequestLatency = new promClient.Histogram({
   help: 'Latency of HTTP requests in seconds',
   labelNames: ['method', 'route'],
   buckets: [0.1, 0.5, 1, 2, 5],
-  registers: [register],
+  registers: [register]
 });
 
 const logLevel = process.env.LOG_LEVEL || 'info';
 const logger = winston.createLogger({
   level: logLevel,
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'server.log' })
-  ]
+  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
+  transports: [new winston.transports.Console(), new winston.transports.File({ filename: 'server.log' })]
 });
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -63,7 +57,7 @@ if (!JWT_SECRET) {
 }
 
 const CLEANUP_INTERVAL_MS = parseInt(process.env.CLEANUP_INTERVAL_MS, 10) || 60 * 60 * 1000;
-const DOWNSAMPLE_FACTOR = parseInt(process.env.DOWNSAMPLE_FACTOR, 10) || 5; // Downsample to 1/5th of original resolution
+const DOWNSAMPLE_FACTOR = parseInt(process.env.DOWNSAMPLE_FACTOR, 10) || 5;
 
 process.on('uncaughtException', (err) => {
   logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
@@ -86,13 +80,11 @@ if (!redisHost || !redisPort || !redisPassword) {
   process.exit(1);
 }
 
-logger.info('Redis configuration', { host: redisHost, port: redisPort });
-
 const redisClient = new Redis({
   host: redisHost,
   port: redisPort,
   password: redisPassword,
-  retryStrategy: (times) => Math.min(times * 50, 10000),
+  retryStrategy: (times) => Math.min(times * 50, 10000)
 });
 
 async function waitForRedis(client, clientName) {
@@ -112,7 +104,6 @@ function encryptMessage(message, key) {
   return `${encrypted}:${iv.toString('base64')}`;
 }
 
-// Downsample spectrogram data
 function downsampleSpectrogram(spectrogram) {
   if (!Array.isArray(spectrogram) || spectrogram.length === 0) return [];
   return spectrogram.filter((_, i) => i % DOWNSAMPLE_FACTOR === 0);
@@ -124,22 +115,17 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
   const app = express();
 
   try {
-    const historyLength = await redisClient.llen('spectrogram_history');
+    const historyLength = await redisClient.llen('spectrogram_history:default');
     if (historyLength === 0) {
       logger.info('Initializing empty spectrogram_history list');
-      await redisClient.lpush('spectrogram_history', JSON.stringify({ spectrogram: [], timestamp: new Date().toISOString(), interval: 5000 }));
-      await redisClient.ltrim('spectrogram_history', 0, 999);
+      await redisClient.lpush('spectrogram_history:default', JSON.stringify({ spectrogram: [], timestamp: new Date().toISOString(), interval: 5000, detectorId: 'default' }));
+      await redisClient.ltrim('spectrogram_history:default', 0, 999);
     }
   } catch (err) {
     logger.error('Failed to initialize spectrogram_history', { error: err.message });
   }
 
-  app.use(cors({
-    origin: 'http://localhost:3001',
-    methods: ['GET', 'POST', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-  }));
-
+  app.use(cors({ origin: 'http://localhost:3001', methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization'] }));
   app.use(compression());
   app.use(express.json());
   app.use(helmet());
@@ -164,10 +150,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     next();
   });
 
-  const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-  });
+  const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 
   app.get('/health', async (req, res) => {
     try {
@@ -232,51 +215,33 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
 
   app.get('/history/:hours', authenticateToken, async (req, res) => {
     const hours = parseInt(req.params.hours, 10);
+    const { detectorId } = req.query;
     if (isNaN(hours) || hours < 1 || hours > 24) return res.status(400).json({ error: 'Invalid hours' });
-
-    const cacheKey = `history:${hours}`;
+    const cacheKey = `history:${hours}:${detectorId || 'all'}`;
     try {
-      // Check cache first
       const cached = await redisClient.get(cacheKey);
       if (cached) {
-        logger.info('Serving history from cache', { hours });
+        logger.info('Serving history from cache', { hours, detectorId });
         return res.json(JSON.parse(cached));
       }
 
       const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-      const records = await redisClient.lrange('spectrogram_history', 0, -1);
-      logger.info('Raw records from Redis:', { count: records.length });
+      const key = detectorId ? `spectrogram_history:${detectorId}` : 'spectrogram_history:*';
+      const records = detectorId 
+        ? await redisClient.lrange(key, 0, -1) 
+        : (await Promise.all((await redisClient.keys(key)).map(k => redisClient.lrange(k, 0, -1)))).flat();
 
-      const filteredRecords = records.filter(record => {
-        try {
-          const parsed = JSON.parse(record);
-          return parsed.timestamp >= cutoff && Array.isArray(parsed.spectrogram) && parsed.interval;
-        } catch (err) {
-          logger.error('Malformed record during filtering', { error: err.message, record });
-          return false;
-        }
-      });
+      const spectrograms = records.map(r => JSON.parse(r)).filter(r => r.timestamp >= cutoff);
+      const result = detectorId 
+        ? spectrograms.map(r => ({ detectorId: r.detectorId, spectrogram: downsampleSpectrogram(r.spectrogram), location: r.location }))
+        : Object.entries(spectrograms.reduce((acc, r) => {
+            acc[r.detectorId] = acc[r.detectorId] || [];
+            acc[r.detectorId].push({ spectrogram: downsampleSpectrogram(r.spectrogram), location: r.location });
+            return acc;
+          }, {})).map(([id, specs]) => ({ detectorId: id, spectrogram: specs.map(s => s.spectrogram).flat(), location: specs[0].location }));
 
-      const spectrograms = filteredRecords.map(record => {
-        try {
-          const parsed = JSON.parse(record);
-          if (!Array.isArray(parsed.spectrogram)) throw new Error('Invalid spectrogram');
-          return downsampleSpectrogram(parsed.spectrogram); // Downsample before sending
-        } catch (err) {
-          logger.error('Malformed spectrogram record', { error: err.message, record });
-          return [];
-        }
-      });
-
-      if (spectrograms.length === 0) {
-        logger.warn('No valid historical data found within the time range');
-        return res.status(200).json([]);
-      }
-
-      logger.info('Processed spectrograms', { count: spectrograms.length });
-      // Cache the result for 5 minutes (300 seconds)
-      await redisClient.setex(cacheKey, 300, JSON.stringify(spectrograms));
-      res.json(spectrograms);
+      await redisClient.setex(cacheKey, 300, JSON.stringify(result));
+      res.json(result);
     } catch (err) {
       logger.error('History fetch error', { error: err.message });
       res.status(500).json({ error: err.message });
@@ -287,9 +252,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     try {
       const { username } = req.params;
       const result = await query('DELETE FROM users WHERE username = $1 RETURNING *', [username]);
-      if (result.rowCount === 0) {
-        return res.status(404).json({ error: 'User not found' });
-      }
+      if (result.rowCount === 0) return res.status(404).json({ error: 'User not found' });
       userKeys.delete(username);
       logger.info('User deleted', { username });
       res.status(200).json({ message: 'User deleted successfully' });
@@ -309,9 +272,7 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     }
   });
 
-  const server = http.createServer(app).listen(3000, () => 
-    logger.info('Server running on HTTP port 3000')
-  );
+  const server = http.createServer(app).listen(3000, () => logger.info('Server running on HTTP port 3000'));
   const wss = new WebSocket.Server({ server });
 
   wss.on('connection', async (ws, req) => {
@@ -321,7 +282,6 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
         ws.close(1008, 'Token required');
         return;
       }
-
       const user = jwt.verify(token, JWT_SECRET);
       ws.user = user;
       logger.info('WebSocket client connected', { username: user.username });
@@ -341,36 +301,24 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
     try {
       const streamData = await redisClient.xread('COUNT', 100, 'STREAMS', 'spectrogram_stream', '0');
       if (streamData) {
-        streamData.forEach(([streamName, messages]) => {
+        streamData.forEach(([_, messages]) => {
           messages.forEach(([id, fields]) => {
-            const message = fields[1];
-            try {
-              const parsedMessage = JSON.parse(message);
-              if (!parsedMessage.spectrogram || !parsedMessage.timestamp || !parsedMessage.interval) {
-                throw new Error('Missing message fields');
-              }
-              // Downsample spectrogram data before storing and sending
-              const downsampledSpectrogram = parsedMessage.spectrogram.map(downsampleSpectrogram);
-              const downsampledMessage = {
-                spectrogram: downsampledSpectrogram,
-                timestamp: parsedMessage.timestamp,
-                interval: parsedMessage.interval
-              };
-              const messageString = JSON.stringify(downsampledMessage);
-              redisClient.lpush('spectrogram_history', messageString);
-              redisClient.ltrim('spectrogram_history', 0, 999);
+            const message = JSON.parse(fields[1]);
+            if (!message.spectrogram || !message.detectorId || !message.location) return;
+            const downsampledSpectrogram = downsampleSpectrogram(message.spectrogram);
+            const downsampledMessage = { ...message, spectrogram: downsampledSpectrogram };
+            const messageString = JSON.stringify(downsampledMessage);
+            redisClient.lpush(`spectrogram_history:${message.detectorId}`, messageString);
+            redisClient.ltrim(`spectrogram_history:${message.detectorId}`, 0, 999);
 
-              wss.clients.forEach((ws) => {
-                if (ws.readyState === WebSocket.OPEN && userKeys.has(ws.user.username)) {
-                  const key = userKeys.get(ws.user.username);
-                  const encryptedMessage = encryptMessage(messageString, key);
-                  ws.send(encryptedMessage);
-                }
-              });
-              redisClient.xdel('spectrogram_stream', id);
-            } catch (err) {
-              logger.error('Message processing error', { error: err.message, message });
-            }
+            wss.clients.forEach(ws => {
+              if (ws.readyState === WebSocket.OPEN && userKeys.has(ws.user.username)) {
+                const key = userKeys.get(ws.user.username);
+                const encryptedMessage = encryptMessage(messageString, key);
+                ws.send(encryptedMessage);
+              }
+            });
+            redisClient.xdel('spectrogram_stream', id);
           });
         });
       }
@@ -384,19 +332,14 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
   setInterval(async () => {
     try {
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const records = await redisClient.lrange('spectrogram_history', 0, -1);
-      const recordsToKeep = records.filter(record => {
-        try {
-          return JSON.parse(record).timestamp >= cutoff;
-        } catch (err) {
-          logger.error('Malformed record during cleanup', { error: err.message });
-          return false;
-        }
-      });
-
-      await redisClient.del('spectrogram_history');
-      if (recordsToKeep.length > 0) await redisClient.lpush('spectrogram_history', recordsToKeep);
-      logger.info('Cleaned up spectrogram history', { remainingRecords: recordsToKeep.length });
+      const historyKeys = await redisClient.keys('spectrogram_history:*');
+      for (const key of historyKeys) {
+        const records = await redisClient.lrange(key, 0, -1);
+        const recordsToKeep = records.filter(record => JSON.parse(record).timestamp >= cutoff);
+        await redisClient.del(key);
+        if (recordsToKeep.length > 0) await redisClient.lpush(key, recordsToKeep);
+        logger.info('Cleaned up spectrogram history', { key, remainingRecords: recordsToKeep.length });
+      }
     } catch (err) {
       logger.error('Cleanup error', { error: err.message });
     }
@@ -404,20 +347,15 @@ waitForRedis(redisClient, 'Redis client').then(async () => {
 
   process.on('SIGINT', async () => {
     logger.info('Shutting down server...');
-    wss.clients.forEach((ws) => ws.close(1000, 'Server shutting down'));
-    try {
-      await redisClient.quit();
-      await end();
-      server.close(() => {
-        logger.info('Server shut down');
-        process.exit(0);
-      });
-    } catch (err) {
-      logger.error('Shutdown error', { error: err.message });
-      process.exit(1);
-    }
+    wss.clients.forEach(ws => ws.close(1000, 'Server shutting down'));
+    await redisClient.quit();
+    await end();
+    server.close(() => {
+      logger.info('Server shut down');
+      process.exit(0);
+    });
   });
-}).catch((err) => {
+}).catch(err => {
   logger.error('Redis initialization failed', { error: err.message });
   process.exit(1);
 });

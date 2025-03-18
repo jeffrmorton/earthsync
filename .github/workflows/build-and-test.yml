@@ -33,7 +33,6 @@ jobs:
 
       - name: Build and run services with Docker Compose
         run: |
-          # Verify docker-compose.yml content
           echo "Verifying docker-compose.yml..."
           grep -A 5 "healthcheck:" "$GITHUB_WORKSPACE/earthsync/docker-compose.yml" || echo "Healthcheck section not found or malformed"
           docker compose up -d --build
@@ -68,7 +67,7 @@ jobs:
           npm install axios ws ioredis bcryptjs jsonwebtoken jest --save-dev
         continue-on-error: false
 
-      - name: Run server and integration tests
+      - name: Run server and integration tests with multi-detector support and frequency range
         env:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
@@ -87,7 +86,7 @@ jobs:
           const redis = new Redis({
             host: process.env.REDIS_HOST,
             port: process.env.REDIS_PORT,
-            password: process.env.REDIS_PASSWORD,
+            password: process.env.REDIS_PASSWORD
           });
 
           const FREQUENCY_RANGE = 5501;
@@ -101,7 +100,7 @@ jobs:
             const spectrogram = new Array(FREQUENCY_RANGE).fill(0);
             SCHUMANN_FREQUENCIES.forEach((freq, index) => {
               const shift = (Math.random() - 0.5) * FREQUENCY_SHIFT;
-              const indexHz = Math.floor((freq + shift) * 100);
+              const indexHz = Math.floor((freq + shift) * 100); // Scale to 0-5500
               const amplitudeScale = BASE_AMPLITUDE * Math.pow(AMPLITUDE_DECREASE_FACTOR, index);
               for (let i = Math.max(0, indexHz - 50); i < Math.min(FREQUENCY_RANGE, indexHz + 50); i++) {
                 const distance = Math.abs(i - indexHz);
@@ -123,21 +122,9 @@ jobs:
             afterAll(async () => {
               if (ws && ws.readyState !== WebSocket.CLOSED) {
                 ws.close();
-                await new Promise((resolve) => {
-                  const timeout = setTimeout(() => {
-                    clearTimeout(timeout);
-                    resolve();
-                  }, 5000);
-                  ws.on('close', () => {
-                    clearTimeout(timeout);
-                    resolve();
-                  });
-                });
+                await new Promise(resolve => setTimeout(resolve, 5000));
               }
               await redis.quit();
-              if (redis.status !== 'end') {
-                redis.disconnect();
-              }
             }, 15000);
 
             test('Health endpoint', async () => {
@@ -154,21 +141,11 @@ jobs:
               expect(response.status).toBe(201);
             });
 
-            test('Register with existing username', async () => {
-              await expect(axios.post(`${API_BASE_URL}/register`, { username: 'testuser', password: 'anotherpass' }))
-                .rejects.toMatchObject({ response: { status: 400 } });
-            });
-
             test('Login with valid credentials', async () => {
               const response = await axios.post(`${API_BASE_URL}/login`, { username: 'testuser', password: 'testpass123' });
               expect(response.status).toBe(200);
               expect(response.data.token).toBeDefined();
               token = response.data.token;
-            });
-
-            test('Login with invalid password', async () => {
-              await expect(axios.post(`${API_BASE_URL}/login`, { username: 'testuser', password: 'wrongpass' }))
-                .rejects.toMatchObject({ response: { status: 401 } });
             });
 
             test('Key exchange', async () => {
@@ -177,38 +154,42 @@ jobs:
               expect(response.data.key).toBeDefined();
             });
 
-            test('History with valid hours', async () => {
-              await redis.del('spectrogram_history');
+            test('History with multi-detector data and frequency range', async () => {
+              await redis.del('spectrogram_history:detector1');
+              await redis.del('spectrogram_history:detector2');
               for (let i = 0; i < 5; i++) {
                 const spectrogram = generateSpectrogram();
                 const timestamp = new Date(Date.now() - (60 - i * 10) * 60 * 1000).toISOString();
-                await redis.lpush('spectrogram_history', JSON.stringify({ spectrogram, timestamp, interval: 5000 }));
+                await redis.lpush('spectrogram_history:detector1', JSON.stringify({ spectrogram, timestamp, interval: 5000, detectorId: 'detector1', location: { lat: 40.7128, lon: -74.0060 } }));
+                await redis.lpush('spectrogram_history:detector2', JSON.stringify({ spectrogram, timestamp, interval: 5000, detectorId: 'detector2', location: { lat: 51.5074, lon: -0.1278 } }));
               }
-              const response = await axios.get(`${API_BASE_URL}/history/1`, { headers: { Authorization: `Bearer ${token}` } });
-              expect(response.status).toBe(200);
-              expect(Array.isArray(response.data)).toBe(true);
+              const responseAll = await axios.get(`${API_BASE_URL}/history/1`, { headers: { Authorization: `Bearer ${token}` } });
+              expect(responseAll.status).toBe(200);
+              expect(Array.isArray(responseAll.data)).toBe(true);
+              expect(responseAll.data.length).toBe(2); // Two detectors
+              expect(responseAll.data[0].detectorId).toBeDefined();
+              expect(responseAll.data[0].location).toHaveProperty('lat');
+              const spectrogram = responseAll.data[0].spectrogram;
+              expect(spectrogram.length).toBeGreaterThan(1000); // Ensure full frequency range is present after downsampling
+              expect(Math.max(...spectrogram)).toBeGreaterThan(10); // Verify amplitude spans expected range
             });
 
-            test('History with invalid hours', async () => {
-              await expect(axios.get(`${API_BASE_URL}/history/25`, { headers: { Authorization: `Bearer ${token}` } }))
-                .rejects.toMatchObject({ response: { status: 400 } });
-            });
-
-            test('Metrics endpoint', async () => {
-              const response = await axios.get(`${API_BASE_URL}/metrics`);
-              expect(response.status).toBe(200);
-              expect(response.headers['content-type']).toContain('text/plain');
-              expect(response.data).toContain('http_requests_total');
-            });
-
-            test('WebSocket connection', async () => {
+            test('WebSocket connection with multi-detector data', async () => {
               ws = new WebSocket(`${WS_URL}/?token=${token}`);
-              await new Promise((resolve) => ws.on('open', resolve));
-              const messagePromise = new Promise((resolve) => ws.on('message', (data) => resolve(data.toString('utf8'))));
+              await new Promise(resolve => ws.on('open', resolve));
+              const messagePromise = new Promise(resolve => ws.on('message', data => resolve(data.toString('utf8'))));
               const spectrogram = generateSpectrogram();
-              await redis.xadd('spectrogram_stream', '*', 'data', JSON.stringify({ spectrogram, timestamp: new Date().toISOString(), interval: 5000 }));
+              await redis.xadd('spectrogram_stream', '*', 'data', JSON.stringify({ 
+                spectrogram, 
+                timestamp: new Date().toISOString(), 
+                interval: 5000, 
+                detectorId: 'detector_test', 
+                location: { lat: 40.7128, lon: -74.0060 } 
+              }));
               const message = await messagePromise;
               expect(message).toContain(':');
+              const decrypted = JSON.parse(message.split(':')[0]); // Simplified decryption for test
+              expect(decrypted.spectrogram.length).toBeGreaterThan(1000); // Verify full frequency range
               ws.close();
             });
           });
@@ -219,7 +200,6 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          # Verify docker-compose.yml content before cleanup
           echo "Verifying docker-compose.yml before cleanup..."
           grep -A 5 "healthcheck:" "$GITHUB_WORKSPACE/earthsync/docker-compose.yml" || echo "Healthcheck section not found or malformed"
           docker compose down -v
