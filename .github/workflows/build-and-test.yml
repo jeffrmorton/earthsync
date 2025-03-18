@@ -159,6 +159,7 @@ jobs:
                 const timestamp = new Date(Date.now() - (60 - i * 10) * 60 * 1000).toISOString();
                 await redis.lpush('spectrogram_history:detector1', JSON.stringify({ spectrogram, timestamp, interval: 5000, detectorId: 'detector1', location: { lat: 40.7128, lon: -74.0060 } }));
                 await redis.lpush('spectrogram_history:detector2', JSON.stringify({ spectrogram, timestamp, interval: 5000, detectorId: 'detector2', location: { lat: 51.5074, lon: -0.1278 } }));
+                await redis.lpush('spectrogram_history:detector3', JSON.stringify({ spectrogram, timestamp, interval: 5000, detectorId: 'detector3', location: { lat: -33.8688, lon: 151.2093 } }));
               }
               const responseAll = await axios.get(`${API_BASE_URL}/history/1`, { headers: { Authorization: `Bearer ${token}` } });
               expect(responseAll.status).toBe(200);

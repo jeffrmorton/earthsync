@@ -95,7 +95,7 @@ To add detectors:
 - **Data issues**: Check console logs for `zData`, `displayData`, and `xLabels`. Ensure `spectrogramData` contains valid arrays spanning 0-55 Hz.
 - **Historical data missing**: Check Redis for detector-specific keys (`docker exec -it earthsync-redis-1 redis-cli -a password keys spectrogram_history:*`).
 - **WebSocket disconnects**: Review server logs for stream errors and detector logs for publishing issues.
-- **Test failures**: If history test fails on detector count, ensure Redis is cleared before tests. If WebSocket test fails, verify key exchange and decryption logic.
+- **Test failures**: If history test fails on detector count, ensure all detectors are pre-populated with data in the test. Verify Redis keys and server logs.
 
 ## CI/CD with GitHub Actions
 The `build-and-test.yml` workflow:
