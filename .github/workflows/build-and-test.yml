@@ -101,7 +101,7 @@ jobs:
             const spectrogram = new Array(FREQUENCY_RANGE).fill(0);
             SCHUMANN_FREQUENCIES.forEach((freq, index) => {
               const shift = (Math.random() - 0.5) * FREQUENCY_SHIFT;
-              const indexHz = Math.floor((freq + shift) * 100); // Scale to 0-5500
+              const indexHz = Math.floor((freq + shift) * 100);
               const amplitudeScale = BASE_AMPLITUDE * Math.pow(AMPLITUDE_DECREASE_FACTOR, index);
               for (let i = Math.max(0, indexHz - 50); i < Math.min(FREQUENCY_RANGE, indexHz + 50); i++) {
                 const distance = Math.abs(i - indexHz);
@@ -153,7 +153,7 @@ jobs:
             });
 
             test('History with multi-detector data and frequency range', async () => {
-              await redis.keys('spectrogram_history:*').then(keys => redis.del(...keys)); // Clear all history keys
+              await redis.keys('spectrogram_history:*').then(keys => redis.del(...keys));
               for (let i = 0; i < 5; i++) {
                 const spectrogram = generateSpectrogram();
                 const timestamp = new Date(Date.now() - (60 - i * 10) * 60 * 1000).toISOString();
@@ -164,12 +164,12 @@ jobs:
               const responseAll = await axios.get(`${API_BASE_URL}/history/1`, { headers: { Authorization: `Bearer ${token}` } });
               expect(responseAll.status).toBe(200);
               expect(Array.isArray(responseAll.data)).toBe(true);
-              expect(responseAll.data.length).toBe(3); // Expect all three detectors from docker-compose
+              expect(responseAll.data.length).toBe(3);
               expect(responseAll.data[0].detectorId).toBeDefined();
               expect(responseAll.data[0].location).toHaveProperty('lat');
               const spectrogram = responseAll.data[0].spectrogram;
-              expect(spectrogram.length).toBeGreaterThan(1000); // Ensure full frequency range after downsampling
-              expect(Math.max(...spectrogram)).toBeGreaterThan(10); // Verify amplitude spans expected range
+              expect(spectrogram.length).toBeGreaterThan(1000);
+              expect(Math.max(...spectrogram)).toBeGreaterThan(10);
             });
 
             test('WebSocket connection with multi-detector data', async () => {
@@ -192,7 +192,7 @@ jobs:
               const keyWordArray = CryptoJS.enc.Hex.parse(key);
               const decrypted = CryptoJS.AES.decrypt({ ciphertext: encryptedBuf }, keyWordArray, { iv: ivBuf, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
               const decryptedData = JSON.parse(decrypted.toString(CryptoJS.enc.Utf8));
-              expect(decryptedData.spectrogram.length).toBeGreaterThan(1000); // Verify full frequency range
+              expect(decryptedData.spectrogram.length).toBeGreaterThan(1000);
               ws.close();
             });
           });

@@ -6,7 +6,7 @@ const Redis = require('ioredis');
 const winston = require('winston');
 const crypto = require('crypto');
 
-const logLevel = process.env.LOG_LEVEL || 'info';
+const logLevel = process.env.LOG_LEVEL || 'warn';
 const logger = winston.createLogger({
   level: logLevel,
   format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
@@ -19,7 +19,7 @@ const redisPassword = process.env.REDIS_PASSWORD;
 const INTERVAL = parseInt(process.env.DETECTOR_INTERVAL, 10) || 5000;
 const DETECTOR_BATCH_SIZE = parseInt(process.env.DETECTOR_BATCH_SIZE, 10) || 2;
 const DETECTOR_ID = process.env.DETECTOR_ID || crypto.randomUUID();
-const LATITUDE = parseFloat(process.env.LATITUDE) || (Math.random() * 180 - 90); // Random for simulation
+const LATITUDE = parseFloat(process.env.LATITUDE) || (Math.random() * 180 - 90);
 const LONGITUDE = parseFloat(process.env.LONGITUDE) || (Math.random() * 360 - 180);
 
 if (!redisHost || !redisPort || !redisPassword) {
@@ -53,7 +53,7 @@ function generateSpectrogram() {
 
   SCHUMANN_FREQUENCIES.forEach((freq, index) => {
     const shift = (Math.random() - 0.5) * FREQUENCY_SHIFT;
-    const indexHz = Math.floor((freq + shift) * 100); // Scale to 0-5500 index
+    const indexHz = Math.floor((freq + shift) * 100);
     const amplitudeScale = BASE_AMPLITUDE * amplitudeMod * Math.pow(amplitudeDecreaseFactor, index);
     for (let i = Math.max(0, indexHz - 50); i < Math.min(FREQUENCY_RANGE, indexHz + 50); i++) {
       const distance = Math.abs(i - indexHz);

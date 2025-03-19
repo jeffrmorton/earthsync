@@ -1,8 +1,8 @@
 version: '3.8'
 services:
   redis:
-    image: redis:6
-    command: redis-server --requirepass password
+    image: redis:7
+    command: redis-server --requirepass password # --save "" can be added to disable RDB saves if vm.overcommit_memory cannot be set to 1 on host
     ports:
       - "6379:6379"
     volumes:
@@ -27,7 +27,7 @@ services:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=password
       - REDIS_EXPORTER_CHECK_SINGLE_KEYS=spectrogram_history:detector1,spectrogram_history:detector2,spectrogram_history:detector3
-      - REDIS_EXPORTER_DEBUG=true
+      - REDIS_EXPORTER_LOG_LEVEL=warn
     ports:
       - "9121:9121"
     networks:
@@ -78,6 +78,7 @@ services:
     environment:
       - JWT_SECRET=1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
       - DOWNSAMPLE_FACTOR=5
+      - LOG_LEVEL=info
     env_file:
       - ./server/.env
     depends_on:
@@ -103,8 +104,9 @@ services:
     build: ./detector
     environment:
       - DETECTOR_ID=detector1
-      - LATITUDE=40.7128  # New York
+      - LATITUDE=40.7128
       - LONGITUDE=-74.0060
+      - LOG_LEVEL=info
     env_file:
       - ./detector/.env
     depends_on:
@@ -123,8 +125,9 @@ services:
     build: ./detector
     environment:
       - DETECTOR_ID=detector2
-      - LATITUDE=51.5074  # London
+      - LATITUDE=51.5074
       - LONGITUDE=-0.1278
+      - LOG_LEVEL=info
     env_file:
       - ./detector/.env
     depends_on:
@@ -143,8 +146,9 @@ services:
     build: ./detector
     environment:
       - DETECTOR_ID=detector3
-      - LATITUDE=-33.8688  # Sydney
+      - LATITUDE=-33.8688
       - LONGITUDE=151.2093
+      - LOG_LEVEL=info
     env_file:
       - ./detector/.env
     depends_on:
@@ -183,6 +187,9 @@ services:
 
   prometheus:
     image: prom/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--log.level=warn'
     ports:
       - "9090:9090"
     volumes:
@@ -197,7 +204,12 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:10.2.0
+    environment:
+      - GF_LOG_LEVEL=warn
+      - GF_CHECK_FOR_UPDATES=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
     ports:
       - "3002:3000"
     volumes:

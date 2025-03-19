@@ -43,7 +43,7 @@ const httpRequestLatency = new promClient.Histogram({
   registers: [register]
 });
 
-const logLevel = process.env.LOG_LEVEL || 'info';
+const logLevel = process.env.LOG_LEVEL || 'warn';
 const logger = winston.createLogger({
   level: logLevel,
   format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
