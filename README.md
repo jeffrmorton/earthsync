@@ -8,8 +8,8 @@ The server API is documented using OpenAPI 3.0. See `server/openapi.yaml` for th
 
 ## Features
 - Real-time 3D visualization of Schumann Resonance with labeled axes (Frequency: 0-55 Hz, Time, Amplitude).
-- Full-screen 3D chart that adjusts to window size, with a yellow line highlighting the last active detector’s data, perfectly centered and unobstructed.
-- Globe at the bottom of the sidebar (200x200 pixels) displaying detector locations (red when active within 5 seconds, blue when idle) with hoverable location tooltips.
+- Full-screen 3D chart that adjusts to window size, with a yellow line highlighting the last active detector’s data.
+- Globe at the bottom of the sidebar displaying detector locations (red when active within 5 seconds, blue when idle) with hoverable location tooltips.
 - Multi-detector support with unique IDs (e.g., `detector1`, `detector2`, `detector3`).
 - User authentication (register/login).
 - Historical data retrieval with server-side caching (5-minute TTL) and detector filtering by ID.
@@ -32,9 +32,7 @@ The server API is documented using OpenAPI 3.0. See `server/openapi.yaml` for th
 ## Installation
 1. Clone or download the repository.
 2. Navigate to the project directory: `cd earthsync`
-3. Combine the setup scripts: `cat part1.sh part2.sh part3.sh part4.sh > setup_earthsync.sh && chmod +x setup_earthsync.sh`
-4. Run the setup script: `./setup_earthsync.sh`
-5. Start the application: `docker-compose up --build`
+3. Start the application: `docker-compose up --build`
 
 ## Usage
 - **Client Interface**: Open `http://localhost:3001`, log in or register, and view the interface. The left sidebar contains controls and a globe at the bottom showing detector locations. The main area displays a full-screen 3D spectrogram plot with accurate 0-55 Hz frequency range. Use the sidebar to switch between real-time and historical data, select a detector by ID, adjust settings, or toggle themes. The client connects to `http://localhost:3000` for API and WebSocket data.
@@ -95,16 +93,9 @@ To add detectors:
 - **Connection issues**: Check ports (3000, 3001, 6379, 5432, 9121, 9090, 3002) and `.env` consistency.
 - **Service unhealthy**: Inspect logs (`docker-compose logs <service>`). For Redis, test with `docker exec -it earthsync-redis-1 redis-cli -a password ping`.
 - **Redis overcommit warning**: Enable `vm.overcommit_memory=1` on the host (`sudo sysctl vm.overcommit_memory=1`) or uncomment `--save ""` in Redis `command` to disable saves (less reliable).
-- **Grafana network errors**: Update/plugin check failures are disabled with `GF_CHECK_FOR_UPDATES=false`. Ensure outbound HTTPS is allowed if re-enabling.
-- **Grafana user admin error**: Anonymous access is enabled with Admin role; access `http://localhost:3002` without login.
 - **Silent detectors/server**: Logs are set to `info`; check for Redis/Postgres connection errors (`docker-compose logs server detector1`).
-- **Redis-Exporter latency error**: Fixed with Redis 7; verify metrics at `http://localhost:9121/metrics`.
-- **Chart not resizing**: Verify `flex: 1` and `height: '100%'` in the `Plotly` `Box`. Check browser DevTools for CSS overrides.
-- **Globe not at bottom**: Adjust `flexGrow: 1` on the upper `Box` or add `mt: 'auto'` to the globe’s `Box`.
 - **Data issues**: Check console logs for `zData`, `displayData`, and `xLabels`. Ensure `spectrogramData` contains valid arrays spanning 0-55 Hz.
-- **Historical data missing**: Check Redis for detector-specific keys (`docker exec -it earthsync-redis-1 redis-cli -a password keys spectrogram_history:*`).
 - **WebSocket disconnects**: Review server logs for stream errors and detector logs for publishing issues.
-- **Test failures**: If history test fails on detector count, ensure all detectors are pre-populated with data in the test. Verify Redis keys and server logs.
 
 ## CI/CD with GitHub Actions
 The `build-and-test.yml` workflow:
