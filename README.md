@@ -3,7 +3,7 @@
 ## Overview
 EarthSync simulates, distributes, ingests, and visualizes time-series geospatial data, modeling Schumann Resonances (SR). It features a React client, Node.js backend (API/WebSocket/Ingest), Node.js detectors, Redis, PostgreSQL, and Prometheus/Grafana monitoring.
 
-**Version 1.1.8** introduces enhanced server-side peak detection (smoothing, prominence, configurable parameters), client-side visualization of historical peak trends (Frequency, Amplitude, Q-Factor), improved error feedback, and minor globe enhancements.
+**Version 1.1.8** introduces enhanced server-side peak detection (smoothing, prominence, configurable parameters), client-side visualization of historical peak trends (Frequency, Amplitude, Q-Factor), improved error feedback, and minor globe enhancements. Includes CI test fixes (v1.1.8a).
 
 ## API Documentation
 See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major API *endpoint* changes from v1.1.7, but the underlying peak detection is improved.
@@ -33,7 +33,7 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
 -   **Backend Improvements**: Input validation, centralized error handling.
 -   **Configurable Logging & Peak Detection**: Via `.env` files.
 -   **Monitoring**: Prometheus & Grafana dashboard includes ingest, peak detection, and Redis metrics.
--   **CI/CD**: GitHub Actions workflow builds and tests core features.
+-   **CI/CD**: GitHub Actions workflow builds and tests core features (timeouts adjusted).
 -   **Dockerized**: Full stack defined in `docker-compose.yml`.
 
 ## Prerequisites
@@ -71,7 +71,7 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
     -   `PEAK_ABSOLUTE_THRESHOLD`: Minimum amplitude for a peak candidate (float >= 0, default 1.0).
 
 ## Monitoring Details
--   Grafana Dashboard updated to reflect metrics accurately.
+-   Grafana Dashboard updated to reflect metrics accurately, including peak detection rate, ingest stats, and Redis peak history size.
 
 ## Adding More Simulated Detectors
 (Same as before - involves updating `docker-compose.yml`, optionally `prometheus.yml`, Grafana queries, and `redis-exporter` config).
@@ -81,7 +81,7 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
     -   Check server logs (`docker compose logs server`) for errors during stream processing or WS broadcasting, especially around peak detection and key retrieval. Look for "WS send skip" messages.
     -   Temporarily increase `LOG_LEVEL` to `debug` in `server/.env` and restart (`docker compose restart server`) for more detail.
     -   Ensure Redis is healthy (`docker compose ps`).
-    -   Try increasing `WS_MESSAGE_TIMEOUT` in the `integration.test.js` file further if the server appears slow under load.
+    -   Try increasing `WS_MESSAGE_TIMEOUT` in the `integration.test.js` file further if the server appears slow under load (now defaults to 25000ms).
 -   **No Peaks Detected/Too Many Peaks:** Adjust peak detection parameters in `server/.env` and restart the server (`docker compose restart server`). Check server logs for peak detection details.
 -   **Data Ingest Issues:** Check server logs for API key/validation errors (esp. spectrogram length - must be 5501). Check request headers and JSON payload.
 -   **Historical Peak Charts Empty:** Ensure historical data exists (`docker compose exec redis redis-cli -a <password> SCAN 0 MATCH peaks:*`, `ZCARD peaks:<id>`). Check browser console for errors. Verify detector selection.

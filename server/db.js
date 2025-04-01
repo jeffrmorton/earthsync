@@ -66,13 +66,13 @@ async function initializeDatabase() {
 }
 
 module.exports = {
-  query: async (text, params) => { /* ... unchanged ... */
+  query: async (text, params) => {
     const start = Date.now(); try { const res = await pool.query(text, params); const duration = Date.now() - start; logger.debug('DB query executed', { text: text.substring(0, 100), duration_ms: duration, rows: res.rowCount }); return res; } catch (err) { logger.error('DB query error', { text: text.substring(0, 100), params, error: err.message, code: err.code }); throw err; }
   },
-  getClient: async () => { /* ... unchanged ... */
+  getClient: async () => {
       const client = await pool.connect(); logger.debug('Manual DB client checkout', { processID: client.processID }); return client;
   },
-  end: async () => { /* ... unchanged ... */
+  end: async () => {
     logger.info('Closing DB pool...'); await pool.end();
   },
   initialize: initializeDatabase

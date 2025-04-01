@@ -143,7 +143,7 @@ const apiLimiter = rateLimit({ windowMs: 1*60*1000, max: 100, message: { error: 
 const ingestLimiter = rateLimit({ windowMs: 1*60*1000, max: 120, message: { error: 'Too many ingest requests.' }, standardHeaders: true, legacyHeaders: false });
 
 // --- API Routes (Health, Register, Login, Key Exchange) ---
-app.get('/health', async (req, res, next) => { /* ... unchanged ... */
+app.get('/health', async (req, res, next) => {
   try {
     const redisPing = await redisClient.ping();
     const streamRedisPing = await streamRedisClient.ping();
@@ -152,20 +152,20 @@ app.get('/health', async (req, res, next) => { /* ... unchanged ... */
   } catch (err) { logger.error('Health check failed', { error: err.message }); next(err); }
 });
 const registerValidationRules = [ body('username').trim().isLength({ min: 3, max: 30 }).withMessage('Username must be 3-30 chars.').matches(/^[a-zA-Z0-9_]+$/).withMessage('Invalid chars in username.'), body('password').isLength({ min: 8 }).withMessage('Password must be >= 8 chars.') ];
-app.post('/register', authLimiter, registerValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged ... */
+app.post('/register', authLimiter, registerValidationRules, validateRequest, async (req, res, next) => {
   const { username, password } = req.body; try { const checkUser = await query('SELECT username FROM users WHERE username = $1', [username]); if (checkUser.rows.length > 0) { return res.status(409).json({ error: 'Username already exists' }); } const hashedPassword = await bcrypt.hash(password, 10); await query('INSERT INTO users (username, password) VALUES ($1, $2)', [username, hashedPassword]); logger.info('User registered', { username }); res.status(201).json({ message: 'Registration successful' }); } catch (err) { logger.error('Registration error', { username, error: err.message }); next(err); }
 });
 const loginValidationRules = [ body('username').trim().notEmpty().withMessage('Username required.'), body('password').notEmpty().withMessage('Password required.') ];
-app.post('/login', authLimiter, loginValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged ... */
+app.post('/login', authLimiter, loginValidationRules, validateRequest, async (req, res, next) => {
   const { username, password } = req.body; try { const result = await query('SELECT id, username, password FROM users WHERE username = $1', [username]); if (result.rows.length === 0) { logger.warn('Login fail: User not found', { username }); return res.status(401).json({ error: 'Invalid username or password' }); } const user = result.rows[0]; const match = await bcrypt.compare(password, user.password); if (!match) { logger.warn('Login fail: Invalid password', { username }); return res.status(401).json({ error: 'Invalid username or password' }); } const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: `${ENCRYPTION_KEY_TTL_SECONDS}s` }); logger.info('User logged in', { username }); res.json({ token }); } catch (err) { logger.error('Login error', { username, error: err.message }); next(err); }
 });
-app.post('/key-exchange', apiLimiter, authenticateToken, async (req, res, next) => { /* ... unchanged ... */
+app.post('/key-exchange', apiLimiter, authenticateToken, async (req, res, next) => {
   const username = req.user.username; try { const key = crypto.randomBytes(32).toString('hex'); const redisKey = `${username}`; await redisClient.setex(redisKey, ENCRYPTION_KEY_TTL_SECONDS, key); logger.info('Key generated/stored', { username, redisKey: REDIS_KEY_PREFIX + redisKey }); res.json({ key }); } catch (err) { logger.error('Key exchange error', { username, error: err.message }); next(err); }
 });
 
 // Historical Data (Spectrogram Only)
 const historyValidationRules = [ param('hours').isInt({ min: 1, max: 72 }).withMessage('Hours must be 1-72.'), queryValidator('detectorId').optional().isString().trim().isLength({ min: 1, max: 50 }).withMessage('Invalid detector ID.') ];
-app.get('/history/:hours', apiLimiter, authenticateToken, historyValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged ... */
+app.get('/history/:hours', apiLimiter, authenticateToken, historyValidationRules, validateRequest, async (req, res, next) => {
   const hours = parseInt(req.params.hours, 10); const { detectorId } = req.query; const username = req.user.username; const cacheKey = `history_spec:${hours}:${detectorId || 'all'}`;
   try {
     const cached = await streamRedisClient.get(cacheKey);
@@ -195,7 +195,7 @@ app.get('/history/:hours', apiLimiter, authenticateToken, historyValidationRules
 
 // Historical Peak Data
 const peakHistoryValidationRules = [ param('hours').isInt({ min: 1, max: 72 }).withMessage('Hours must be 1-72.'), queryValidator('detectorId').optional().isString().trim().isLength({ min: 1, max: 50 }).withMessage('Invalid detector ID.') ];
-app.get('/history/peaks/:hours', apiLimiter, authenticateToken, peakHistoryValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged ... */
+app.get('/history/peaks/:hours', apiLimiter, authenticateToken, peakHistoryValidationRules, validateRequest, async (req, res, next) => {
     const hours = parseInt(req.params.hours, 10); const { detectorId } = req.query; const username = req.user.username; const cacheKey = `history_peaks:${hours}:${detectorId || 'all'}`;
     try {
         const cached = await streamRedisClient.get(cacheKey); if (cached) { logger.info('Serving peak history from cache', { username, hours, detectorId }); return res.json(JSON.parse(cached)); }
@@ -234,7 +234,7 @@ const ingestValidationRules = [
     body('spectrograms.*.*').isFloat({ min: 0 }).withMessage('Spectrogram values must be non-negative numbers.'),
     body().custom(value => { const maxAmp = value.spectrograms.flat().reduce((max, val) => Math.max(max, val), 0); if (maxAmp > 1000) { throw new Error('Max amplitude too high.'); } return true; })
 ];
-app.post('/data-ingest', ingestLimiter, authenticateApiKey, ingestValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged ... */
+app.post('/data-ingest', ingestLimiter, authenticateApiKey, ingestValidationRules, validateRequest, async (req, res, next) => {
     const { detectorId, location, spectrograms } = req.body; const timestamp = req.body.timestamp || new Date().toISOString(); const streamKey = 'spectrogram_stream';
     const messagePayload = { detectorId, timestamp, location, spectrogram: spectrograms, interval: 0 }; const messageString = JSON.stringify(messagePayload);
     try { const messageId = await streamRedisClient.xadd(streamKey, '*', 'data', messageString); logger.info('Data batch ingested to stream', { detectorId, batchSize: spectrograms.length, messageId }); dataIngestCounter.inc({ status: 'success' }); res.status(202).json({ message: 'Data batch accepted.', messageId }); } catch (err) { logger.error('Data ingest stream add error', { detectorId, error: err.message }); dataIngestCounter.inc({ status: 'error' }); next(err); }
@@ -242,7 +242,7 @@ app.post('/data-ingest', ingestLimiter, authenticateApiKey, ingestValidationRule
 
 // User Deletion
 const userDeleteValidationRules = [ param('username').trim().isLength({ min: 3, max: 30 }).matches(/^[a-zA-Z0-9_]+$/).withMessage('Invalid username format.') ];
-app.delete('/users/:username', apiLimiter, authenticateToken, userDeleteValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged ... */
+app.delete('/users/:username', apiLimiter, authenticateToken, userDeleteValidationRules, validateRequest, async (req, res, next) => {
   const targetUsername = req.params.username; const requesterUsername = req.user.username;
   if (targetUsername !== requesterUsername) { logger.warn('User delete forbidden', { requester: requesterUsername, target: targetUsername }); return res.status(403).json({ error: 'Forbidden: Cannot delete other users.' }); }
   try { const result = await query('DELETE FROM users WHERE username = $1 RETURNING username', [targetUsername]); if (result.rowCount === 0) { logger.warn('User delete failed: Not found', { username: targetUsername }); return res.status(404).json({ error: 'User not found' }); }
@@ -250,13 +250,13 @@ app.delete('/users/:username', apiLimiter, authenticateToken, userDeleteValidati
 });
 
 // Prometheus Metrics Endpoint
-app.get('/metrics', async (req, res, next) => { /* ... unchanged ... */
+app.get('/metrics', async (req, res, next) => {
   try { res.set('Content-Type', register.contentType); res.end(await register.metrics()); } catch (err) { logger.error('Metrics endpoint error', { error: err.message }); next(err); }
 });
 
 // --- WebSocket Server Setup ---
 const wss = new WebSocket.Server({ server });
-wss.on('connection', async (ws, req) => { /* ... unchanged ... */
+wss.on('connection', async (ws, req) => {
   let username = 'unknown'; try { const requestUrl = new URL(req.url, `ws://${req.headers.host}`); const token = requestUrl.searchParams.get('token'); if (!token) { logger.warn('WS connection no token'); ws.close(1008, 'Token required'); return; } const decoded = jwt.verify(token, JWT_SECRET); username = decoded.username; if (!username) throw new Error("Token missing username"); ws.username = username; logger.info('WS client connected', { username }); websocketConnections.inc(); ws.on('message', (message) => { logger.debug('WS message received', { username, message: message.toString().substring(0,100) }); }); ws.on('close', (code, reason) => { logger.info('WS client disconnected', { username, code, reason: reason.toString() }); websocketConnections.dec(); }); ws.on('error', (err) => { logger.error('WS connection error', { username, error: err.message }); }); } catch (err) { if (err instanceof jwt.JsonWebTokenError || err instanceof jwt.TokenExpiredError) { logger.warn('WS connection failed: Invalid token', { error: err.message }); ws.close(1008, 'Invalid or expired token'); } else { logger.error('WS connection setup error', { username, error: err.message }); ws.close(1011, 'Internal server error'); } }
 });
 wss.on('error', (err) => { logger.error('WebSocket Server Error', { error: err.message }); });
@@ -385,9 +385,23 @@ function detectPeaksEnhanced(rawSpectrum) {
 // --- Placeholder Functions ---
 async function trackPeaks(detectorId, currentPeaks, timestamp) {
     // TODO: Implement logic to compare currentPeaks with previous peaks for this detector.
+    // - Retrieve previous peaks (e.g., from Redis or a dedicated data structure).
+    // - Compare frequencies, amplitudes, Q-factors within certain tolerances.
+    // - Identify peaks that have shifted, appeared, or disappeared.
+    // - Store tracking information or trigger alerts based on significant changes.
+    // Example: Log changes for now
+    if (currentPeaks.length > 0) {
+      logger.debug("Placeholder: Track peaks called", { detectorId, numPeaks: currentPeaks.length, timestamp });
+    }
 }
 async function detectTransients(detectorId, rawSpectrum, timestamp) {
-    // TODO: Implement logic to detect anomalies.
+    // TODO: Implement logic to detect anomalies or transient events.
+    // - Compare the current spectrum against a baseline or recent history.
+    // - Look for sudden broadband increases in power.
+    // - Look for unusual narrow-band signals not corresponding to known peaks.
+    // - Could involve comparing against a statistical model of 'normal' noise/SR.
+    // Example: Log for now
+    logger.debug("Placeholder: Detect transients called", { detectorId, timestamp });
 }
 
 
@@ -461,6 +475,7 @@ async function processStreamMessages() {
                                     peaksDetectedCounter.inc({ detectorId: parsedMessage.detectorId }, allDetectedPeaksForWs.length);
                                     const peakKey = `peaks:${parsedMessage.detectorId}`;
                                     pipeline.zadd(peakKey, messageTimestampMs, JSON.stringify(allDetectedPeaksForWs));
+                                    logger.debug("Adding peaks to history", { key: peakKey, score: messageTimestampMs, count: allDetectedPeaksForWs.length });
                                 }
                                 await trackPeaks(parsedMessage.detectorId, allDetectedPeaksForWs, messageTimestampMs);
                                 await detectTransients(parsedMessage.detectorId, firstRawSpecForProcessing, messageTimestampMs);
@@ -476,12 +491,13 @@ async function processStreamMessages() {
                             const historyKey = `spectrogram_history:${parsedMessage.detectorId}`;
                             pipeline.lpush(historyKey, messageString);
                             pipeline.ltrim(historyKey, 0, 999);
+                            logger.debug("Adding spectrogram to history", { key: historyKey, numRows: downsampledBatch.length });
 
                             await pipeline.exec();
 
                             // --- Broadcast ---
                             let sentCount = 0;
-                            logger.debug(`Broadcasting message ${messageId} to ${wss.clients.size} potential clients`, { detectorId: parsedMessage.detectorId });
+                            logger.debug(`Broadcasting message ${messageId} to ${wss.clients.size} potential clients`, { detectorId: parsedMessage.detectorId, peakCount: allDetectedPeaksForWs.length });
                             for (const ws of wss.clients) {
                                 // Explicitly check readyState before attempting to get key or send
                                 if (ws.readyState === WebSocket.OPEN && ws.username) {
@@ -525,7 +541,7 @@ async function processStreamMessages() {
 
 
 // --- Periodic Cleanup Task ---
-async function cleanupOldHistory() { /* ... unchanged ... */
+async function cleanupOldHistory() {
     logger.info('Running periodic history cleanup task...');
     const historyHours = 25; const peakHours = 73;
     const specCutoffTimestampMs = Date.now() - (historyHours * 60 * 60 * 1000);
@@ -560,19 +576,19 @@ async function cleanupOldHistory() { /* ... unchanged ... */
 }
 
 // --- Centralized Error Handling Middleware ---
-app.use((err, req, res, next) => { /* ... unchanged ... */
+app.use((err, req, res, next) => {
   logger.error('Unhandled API Error', { error: err.message, stack: err.stack, url: req.originalUrl, method: req.method, ip: req.ip, status: err.status || err.statusCode || 500 });
   const status = err.status || err.statusCode || 500; const message = (process.env.NODE_ENV === 'production' && status >= 500) ? 'Internal server error.' : err.message || 'Unexpected error.';
   if (!res.headersSent) { res.status(status).json({ error: message }); } else { next(err); }
 });
 
 // --- Start Server and Background Tasks ---
-async function startServer() { /* ... unchanged ... */
+async function startServer() {
     try { await redisClient.connect(); await streamRedisClient.connect(); logger.info('Redis clients connected, starting HTTP server...'); server.listen(PORT, () => { logger.info(`HTTP Server listening on port ${PORT}`); processStreamMessages(); setTimeout(cleanupOldHistory, 10000); }); } catch (err) { logger.error('Server startup failed', { error: err.message }); await redisClient.quit().catch(()=>{}); await streamRedisClient.quit().catch(()=>{}); process.exit(1); }
 }
 
 // --- Graceful Shutdown ---
-async function gracefulShutdown(signal) { /* ... unchanged ... */
+async function gracefulShutdown(signal) {
   logger.info(`Received ${signal}. Shutting down gracefully...`); let exitCode = 0;
   server.close(async () => { logger.info('HTTP server closed.'); logger.info('Closing WS connections...'); wss.clients.forEach(ws => ws.terminate());
     try { if (redisClient.status === 'ready' || redisClient.status === 'connecting') { await redisClient.quit(); logger.info('Main Redis closed.'); } } catch (err) { logger.error('Error closing main Redis:', { error: err.message }); exitCode = 1; }
