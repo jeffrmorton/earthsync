@@ -1,20 +1,16 @@
-FROM node:18.20.7 AS builder
+FROM node:18.20.7-alpine AS base
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install
+COPY package*.json ./
 
-COPY . ./
+RUN npm install --omit=dev
 
-FROM node:18.20.7
+COPY . .
 
-WORKDIR /app
-
-COPY --from=builder /app /app
-
-USER node
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

@@ -1,107 +1,82 @@
 # EarthSync Project
 
 ## Overview
-EarthSync is a web application that visualizes Schumann Resonance data in 3D from multiple detectors worldwide. It features a client interface with a perfectly placed full-screen 3D chart spanning 0-55 Hz accurately, a globe at the bottom of the sidebar showing detector locations, a server for API and WebSocket connections, detectors generating synthetic data with geospatial metadata, and monitoring with Prometheus and Grafana.
+EarthSync simulates and visualizes Schumann Resonance data in 3D from multiple virtual detectors. It features a React client, Node.js backend (API/WebSocket), Node.js detectors, Redis (caching/messaging/key storage), PostgreSQL user storage, and Prometheus/Grafana monitoring. This version includes enhanced simulation, input validation, error handling, improved UI feedback, state persistence, and a stateless server architecture (regarding user keys).
 
 ## API Documentation
-The server API is documented using OpenAPI 3.0. See `server/openapi.yaml` for the full specification. Import it into tools like Swagger UI to explore endpoints.
+See `server/openapi.yaml` for the OpenAPI 3.0 specification. Use tools like Swagger UI or Postman to interact with the API at `http://localhost:3000`.
 
 ## Features
-- Real-time 3D visualization of Schumann Resonance with labeled axes (Frequency: 0-55 Hz, Time, Amplitude).
-- Full-screen 3D chart that adjusts to window size, with a yellow line highlighting the last active detector’s data.
-- Globe at the bottom of the sidebar displaying detector locations (red when active within 5 seconds, blue when idle) with hoverable location tooltips.
-- Multi-detector support with unique IDs (e.g., `detector1`, `detector2`, `detector3`).
-- User authentication (register/login).
-- Historical data retrieval with server-side caching (5-minute TTL) and detector filtering by ID.
-- Adjustable time windows, color scales, and normalization.
-- Configurable log levels via environment variables (default: `info` for detectors/server, `warn` for others).
-- Monitoring with Prometheus and Grafana (HTTP requests, WebSocket connections, Redis queue length for all detectors).
-- CI/CD pipeline with GitHub Actions.
-- Dockerized deployment with healthchecks.
-- HTTP support for development (HTTPS can be enabled with certificates).
-- Performance optimizations: server-side downsampling (default factor 5), client-side throttle (1000ms).
-- Aesthetic enhancements: detailed night Earth texture and glow effect on active detectors.
+-   **Real-time 3D Visualization**: Plotly.js surface plot (Frequency: 0-55 Hz, Time, Amplitude).
+-   **Responsive Full-Screen Chart**: Adapts to window size. Plotly controls enabled.
+-   **Sidebar Globe**: `react-globe.gl` showing detector locations (Red=Active, Blue=Idle, Grey=Historical). Clickable points select detector. Width matches sidebar.
+-   **Multi-Detector Support**: Default: `detector1` (NYC), `detector2` (London), `detector3` (Sydney). Easily extendable.
+-   **User Authentication**: JWT-based registration/login.
+-   **Encrypted WebSockets**: Real-time data streaming (AES-256-CBC). Key exchange required (key stored in Redis with TTL). Status indicator in UI. Stable connection with reconnect logic.
+-   **Stateless Server (Keys)**: User encryption keys are stored in Redis, not server memory, allowing for horizontal scaling behind a load balancer.
+-   **Historical Data**: Retrieve data (1-72h), cached in Redis (5min TTL). Filter by detector.
+-   **Enhanced Simulation**: Includes diurnal amplitude variations and randomized peak sharpness/noise.
+-   **Client Controls & Persistence**: Real-time/Historical toggle, Detector selection, Time window (30-600s), Color scale, Normalization, Theme toggle, Sidebar toggle, Logout. Most settings (except mode/hours) persist in `localStorage`.
+-   **Improved Feedback**: Loading indicators (top bar, plot area) for data fetching/transitions, WebSocket connection status display, Snackbar alerts for errors.
+-   **Backend Improvements**: Input validation (`express-validator`) on API endpoints, centralized error handling.
+-   **Configurable Logging**: Set log levels via `.env` (defaults: `info` for server/detectors, `warn` for monitoring).
+-   **Monitoring**: Prometheus & Grafana dashboard showing HTTP metrics, WS connections, Redis list lengths, and stored user key count.
+-   **CI/CD**: GitHub Actions workflow builds, tests (API, WS, simulation), and cleans up.
+-   **Dockerized**: Full stack defined in `docker-compose.yml` with healthchecks. Uses `npm install` for easier builds.
 
 ## Prerequisites
-- Docker
-- Docker Compose
-- GitHub account for CI/CD
-- Bash-compatible shell (Linux/macOS; on Windows, use Git Bash or WSL2)
-- Host configuration: Enable memory overcommit for Redis stability (`sudo sysctl vm.overcommit_memory=1` or edit `/etc/sysctl.conf` and reboot)
+-   Docker & Docker Compose (v2 recommended for `docker compose` syntax)
+-   Git
+-   Bash-compatible Shell
+-   Recommended: `sudo sysctl vm.overcommit_memory=1` on host for Redis stability.
 
 ## Installation
-1. Clone or download the repository.
-2. Navigate to the project directory: `cd earthsync`
-3. Start the application: `docker-compose up --build`
+1.  `git clone <repository-url>` or save the setup script and run it (`./setup_earthsync.sh`).
+2.  `cd earthsync`
+3.  **(IMPORTANT)** If you ran previous versions of this script, clean up old volumes to prevent potential conflicts (especially with Grafana):
+    `docker compose down -v`
+4.  `docker compose up --build -d` (Use `docker-compose` if `docker compose` command is not available)
 
 ## Usage
-- **Client Interface**: Open `http://localhost:3001`, log in or register, and view the interface. The left sidebar contains controls and a globe at the bottom showing detector locations. The main area displays a full-screen 3D spectrogram plot with accurate 0-55 Hz frequency range. Use the sidebar to switch between real-time and historical data, select a detector by ID, adjust settings, or toggle themes. The client connects to `http://localhost:3000` for API and WebSocket data.
-- **Prometheus Metrics**: Access at `http://localhost:9090` for raw metrics.
-- **Grafana Dashboard**: Access at `http://localhost:3002` (anonymous access enabled with Admin role). The "EarthSync Server Metrics" dashboard shows HTTP request rates, WebSocket connections, and Redis queue lengths for all detectors.
-- **Logs**: View service logs with `docker-compose logs <service_name>` (e.g., `server`, `detector1`). Detectors and server use `info` level for detailed output; others use `warn`.
+-   **Client**: `http://localhost:3001` (Register/Login)
+-   **API**: `http://localhost:3000` (See `openapi.yaml`)
+-   **Prometheus**: `http://localhost:9090`
+-   **Grafana**: `http://localhost:3002` (Anonymous viewing enabled. Login as admin/admin for editing if needed, unless defaults changed).
+-   **Logs**: `docker compose logs -f <service_name>` (e.g., `server`, `detector1`)
 
-## Stopping the Application
-- Stop and remove containers: `docker-compose down`
-- Stop and remove containers with volumes (reset data): `docker-compose down -v`
+## Stopping
+-   `docker compose down` (Stop & remove containers)
+-   `docker compose down -v` (Stop, remove containers & volumes - **Deletes all data**)
 
-## Environment Variables
-Edit `.env` files in `client`, `server`, and `detector` directories:
-- `REACT_APP_API_BASE_URL` (client): API endpoint (default: `http://localhost:3000`)
-- `REACT_APP_WS_URL` (client): WebSocket endpoint (default: `ws://localhost:3000`)
-- `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`: Redis connection details
-- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`: PostgreSQL details
-- `JWT_SECRET`: JWT secret (set in `docker-compose.yml`)
-- `DETECTOR_INTERVAL`: Data generation interval (ms, default: 5000)
-- `DETECTOR_BATCH_SIZE`: Spectrograms per batch (default: 2)
-- `DETECTOR_ID`: Unique detector identifier (e.g., `detector1`)
-- `LATITUDE`, `LONGITUDE`: Detector GPS coordinates (e.g., 40.7128, -74.0060 for New York)
-- `LOG_LEVEL`: Log level (e.g., `info` for detectors/server, `warn` for others)
-- `REDIS_EXPORTER_LOG_LEVEL`: Log level for Redis Exporter (default: `warn`)
-- `GF_LOG_LEVEL`: Log level for Grafana (default: `warn`)
-- `CLEANUP_INTERVAL_MS`: Redis history cleanup interval (ms, default: 3600000)
-- `DOWNSAMPLE_FACTOR`: Spectrogram downsampling factor (default: 5)
+## Configuration
+Managed via `.env` files (client, server, detector) and `docker-compose.yml` environment variables. Key storage is now in Redis (prefix `userkey:`, TTL matches JWT expiry). Grafana anonymous access is set to `Viewer`.
 
-## Resource Limits
-Docker Compose sets the following limits (adjust in `docker-compose.yml`):
-- **redis**: 0.5 CPU, 512MB RAM
-- **redis-exporter**: 0.2 CPU, 128MB RAM
-- **postgres**: 0.5 CPU, 512MB RAM
-- **server**: 1.0 CPU, 1GB RAM
-- **detector1, detector2, detector3**: 0.5 CPU, 256MB RAM each
-- **client**: 0.5 CPU, 256MB RAM
-- **prometheus**: 0.5 CPU, 256MB RAM
-- **grafana**: 0.5 CPU, 256MB RAM
-
-## Monitoring
-- **Prometheus**: Scrapes metrics from `http://server:3000/metrics` and `http://redis-exporter:9121`. Access at `http://localhost:9090`. Logs are set to `warn` level via `--log.level=warn`.
-- **Grafana**: Uses Prometheus as a data source, displaying:
-  - **HTTP Requests Rate**: Requests per second by method, route, and status.
-  - **WebSocket Connections**: Active connections over time.
-  - **Redis Spectrogram History Length**: Length of `spectrogram_history:detector1`, `detector2`, and `detector3` queues.
-  Logs are set to `warn` level via `GF_LOG_LEVEL=warn`.
-- **Redis Exporter**: Runs on port 9121, exposing metrics for all detector history keys. Verify at `http://localhost:9121/metrics`. Logs are set to `warn` level.
+## Monitoring Details
+-   **Prometheus**: Scrapes `server:3000/metrics` and `redis-exporter:9121/metrics`.
+-   **Grafana Dashboard ("EarthSync Monitoring Dashboard")**:
+    -   HTTP Request Rate & Latency (P95)
+    -   Active WebSocket Connections
+    -   Redis History List Length (per detector)
+    -   Stored User Encryption Keys (Count)
 
 ## Adding More Detectors
-To add detectors:
-1. Duplicate a detector service in `docker-compose.yml` (e.g., `detector4`).
-2. Set unique `DETECTOR_ID`, `LATITUDE`, and `LONGITUDE` in the `environment` section.
-3. Update `REDIS_EXPORTER_CHECK_SINGLE_KEYS` in `redis-exporter` to include the new key (e.g., `spectrogram_history:detector4`).
-4. Restart with `docker-compose up -d --build`.
+1.  Duplicate a detector service (e.g., `detector3` -> `detector4`) in `docker-compose.yml`.
+2.  Assign a unique `DETECTOR_ID` and desired `LATITUDE`, `LONGITUDE` in its `environment` section.
+3.  Add the new history key (e.g., `spectrogram_history:detector4`) to `REDIS_EXPORTER_CHECK_SINGLE_KEYS` under the `redis-exporter` service.
+4.  Update the Grafana dashboard JSON (`grafana/provisioning/dashboards/earthsync-dashboard.json`) query for "Redis Spectrogram History Length" to include the new key pattern (`key=~"spectrogram_history:detector.*"` should pick it up automatically), or add a new panel.
+5.  Restart: `docker compose up -d --build --force-recreate`
 
 ## Troubleshooting
-- **Build fails**: Ensure Docker and Docker Compose are running (`docker --version`, `docker-compose --version`).
-- **Connection issues**: Check ports (3000, 3001, 6379, 5432, 9121, 9090, 3002) and `.env` consistency.
-- **Service unhealthy**: Inspect logs (`docker-compose logs <service>`). For Redis, test with `docker exec -it earthsync-redis-1 redis-cli -a password ping`.
-- **Redis overcommit warning**: Enable `vm.overcommit_memory=1` on the host (`sudo sysctl vm.overcommit_memory=1`) or uncomment `--save ""` in Redis `command` to disable saves (less reliable).
-- **Silent detectors/server**: Logs are set to `info`; check for Redis/Postgres connection errors (`docker-compose logs server detector1`).
-- **Data issues**: Check console logs for `zData`, `displayData`, and `xLabels`. Ensure `spectrogramData` contains valid arrays spanning 0-55 Hz.
-- **WebSocket disconnects**: Review server logs for stream errors and detector logs for publishing issues.
-
-## CI/CD with GitHub Actions
-The `build-and-test.yml` workflow:
-- Builds all Docker images on push/PR to `main`.
-- Tests API endpoints, WebSocket connectivity, multi-detector data, and frequency range (0-55 Hz) integrity.
-- Cleans up resources afterward.
+-   **Build Failures**: Check Docker daemon, Dockerfile syntax, `npm install` logs. Check network connectivity or `package.json` validity. Use `docker compose build --no-cache <service_name>`.
+-   **Connection Issues**: Check `docker compose ps`, service logs (`docker compose logs ...`), `.env` files, port conflicts. Ensure services can reach Redis/Postgres by their service names.
+-   **Service Unhealthy**: Check logs, test healthcheck command manually (`docker exec ...`).
+-   **Redis `overcommit_memory`**: Apply `vm.overcommit_memory=1` on host or disable Redis saves.
+-   **No Data/Flat Chart**: Check browser console (F12) for JS errors. Check `updateSpectrogram` logic. Verify server logs for stream processing errors or Redis key fetch errors. Check detector logs. Check Redis (`docker exec <redis_id> redis-cli -a password XLEN spectrogram_stream`, `XRANGE spectrogram_stream - + COUNT 1`, `SCAN 0 MATCH userkey:*`, `SCAN 0 MATCH spectrogram_history:*`).
+-   **WebSocket Issues**: Check WS Status indicator. Check browser console/server logs for errors. If WS connects/disconnects, check `useEffect` dependencies and key retrieval logic. Ensure JWT/key TTLs match.
+-   **Grafana Issues**:
+    -   **Dashboard Not Loading/Provisioning Errors:** Run `docker compose down -v` then `docker compose up --build -d` to ensure a clean Grafana volume. Check Grafana logs (`docker compose logs grafana`). The `No available receivers` warning is expected. The `Could not make user admin ... userID=0` error *should* be resolved by setting the anonymous role to Viewer, but cleaning the volume is the best first step if it persists.
+    -   **Metrics Not Showing:** Check Prometheus UI (`/targets`), ensure metric names match dashboard queries. Check Redis Exporter config in `docker-compose.yml`.
+-   **Settings Not Persisted**: Clear browser localStorage for `localhost:3001`. Check console for `localStorage` errors.
 
 ## License
-MIT License (see LICENSE file for details).
+MIT License. See [LICENSE](LICENSE) file.

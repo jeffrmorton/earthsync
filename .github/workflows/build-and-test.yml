@@ -1,20 +1,22 @@
-name: Build and Test
+name: Build and Test EarthSync
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          path: earthsync
         continue-on-error: false
 
       - name: Set up Docker Buildx
@@ -23,187 +25,326 @@ jobs:
           install: true
         continue-on-error: false
 
-      - name: Install Docker Compose
+      - name: Install Docker Compose V2
         run: |
-          sudo mkdir -p /usr/local/lib/docker/cli-plugins
-          sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
-          sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
+          mkdir -p $DOCKER_CONFIG/cli-plugins
+          curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 -o $DOCKER_CONFIG/cli-plugins/docker-compose
+          chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
           docker compose version
         continue-on-error: false
 
-      - name: Build and run services with Docker Compose
+      - name: Verify docker-compose.yml exists
+        working-directory: ./earthsync
         run: |
-          echo "Verifying docker-compose.yml..."
-          grep -A 5 "healthcheck:" "$GITHUB_WORKSPACE/earthsync/docker-compose.yml" || echo "Healthcheck section not found or malformed"
-          docker compose up -d --build
+          ls -l docker-compose.yml
+          echo "Verifying docker-compose.yml content (healthcheck example)..."
+          grep -A 5 "healthcheck:" docker-compose.yml || echo "Healthcheck section not found or malformed (may be OK)"
+
+      - name: Build and Run Services with Docker Compose
+        working-directory: ./earthsync
+        run: docker compose up -d --build --remove-orphans
         continue-on-error: false
 
-      - name: Wait for services to be healthy
+      - name: Wait for Services to be Healthy
+        working-directory: ./earthsync
         run: |
-          echo "Waiting for server to be ready..."
-          for i in {1..30}; do
-            if curl -f http://localhost:3000/health; then
-              echo "Server is ready!"
+          echo "Waiting for services to stabilize and become healthy..."
+          sleep 15
+          echo "Checking service health status..."
+          MAX_RETRIES=30
+          RETRY_INTERVAL=3
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i/$MAX_RETRIES: Checking server health..."
+            if curl -fsS --max-time 2 http://localhost:3000/health; then
+              echo "Server is healthy!"
               break
             fi
-            echo "Attempt $i/30: Server not ready yet..."
-            sleep 2
+            if [ $i -eq $MAX_RETRIES ]; then
+              echo "Server failed to become healthy within timeout."
+              echo "--- Server Logs ---"
+              docker compose logs server || echo "Failed to get server logs."
+              echo "--- Detector1 Logs ---"
+              docker compose logs detector1 || echo "Failed to get detector1 logs."
+              exit 1
+            fi
+            sleep $RETRY_INTERVAL
           done
-          if [ $i -eq 30 ]; then
-            echo "Server failed to start within 60 seconds"
-            docker compose logs
-            exit 1
-          fi
         continue-on-error: false
 
-      - name: Set up Node.js for testing
+      - name: Set up Node.js for Testing
         uses: actions/setup-node@v4
         with:
           node-version: '18'
         continue-on-error: false
 
-      - name: Install test dependencies
-        run: |
-          npm install axios ws ioredis bcryptjs jsonwebtoken jest crypto-js --save-dev
+      - name: Install Test Dependencies
+        working-directory: ./earthsync
+        run: npm install --save-dev axios ws ioredis bcryptjs jsonwebtoken jest@^29 crypto-js
         continue-on-error: false
 
-      - name: Run server and integration tests with multi-detector support and frequency range
+      - name: Run Integration Tests
+        working-directory: ./earthsync
         env:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           REDIS_PASSWORD: password
+          API_BASE_URL: http://localhost:3000
+          WS_URL: ws://localhost:3000
+          JWT_SECRET: 1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
+          NODE_ENV: test
+          JEST_TIMEOUT: 30000
         run: |
-          cat << 'TEST_EOF' > test.js
+          cat << 'TEST_EOF' > integration.test.js
           const axios = require('axios');
           const WebSocket = require('ws');
           const Redis = require('ioredis');
-          const bcrypt = require('bcryptjs');
           const jwt = require('jsonwebtoken');
           const CryptoJS = require('crypto-js');
 
-          const API_BASE_URL = 'http://localhost:3000';
-          const WS_URL = 'ws://localhost:3000';
-          const JWT_SECRET = '1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p';
+          const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
+          const WS_URL = process.env.WS_URL || 'ws://localhost:3000';
+          const JWT_SECRET = process.env.JWT_SECRET || '1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p';
+          const TEST_TIMEOUT = parseInt(process.env.JEST_TIMEOUT || '30000', 10);
+          const DOWNSAMPLE_FACTOR = 5;
+          const FREQUENCY_RANGE_POINTS = 5501;
+          const EXPECTED_DOWNSAMPLED_LENGTH = Math.ceil(FREQUENCY_RANGE_POINTS / DOWNSAMPLE_FACTOR);
+
+          // Main Redis client (for user keys if needed, includes prefix)
           const redis = new Redis({
-            host: process.env.REDIS_HOST,
-            port: process.env.REDIS_PORT,
-            password: process.env.REDIS_PASSWORD
+              host: process.env.REDIS_HOST || 'localhost',
+              port: parseInt(process.env.REDIS_PORT || '6379', 10),
+              password: process.env.REDIS_PASSWORD || 'password',
+              lazyConnect: true,
+              keyPrefix: 'userkey:', // Match server config
+              retryStrategy: times => Math.min(times * 100, 3000),
+              reconnectOnError: () => true,
+              maxRetriesPerRequest: 3,
+              showFriendlyErrorStack: process.env.NODE_ENV !== 'production'
           });
 
-          const FREQUENCY_RANGE = 5501;
-          const SCHUMANN_FREQUENCIES = [7.83, 14.3, 20.8, 27.3, 33.8, 39.0, 45.0, 51.0];
-          const NOISE_LEVEL = 2.0;
-          const FREQUENCY_SHIFT = 0.3;
-          const BASE_AMPLITUDE = 15.0;
-          const AMPLITUDE_DECREASE_FACTOR = 0.8;
+           // Separate client for stream/history interaction (no prefix)
+          const historyRedis = new Redis({
+               host: process.env.REDIS_HOST || 'localhost',
+               port: parseInt(process.env.REDIS_PORT || '6379', 10),
+               password: process.env.REDIS_PASSWORD || 'password',
+               lazyConnect: true,
+               retryStrategy: times => Math.min(times * 100, 3000),
+               reconnectOnError: () => true,
+               maxRetriesPerRequest: 3
+           });
 
-          function generateSpectrogram() {
-            const spectrogram = new Array(FREQUENCY_RANGE).fill(0);
-            SCHUMANN_FREQUENCIES.forEach((freq, index) => {
-              const shift = (Math.random() - 0.5) * FREQUENCY_SHIFT;
-              const indexHz = Math.floor((freq + shift) * 100);
-              const amplitudeScale = BASE_AMPLITUDE * Math.pow(AMPLITUDE_DECREASE_FACTOR, index);
-              for (let i = Math.max(0, indexHz - 50); i < Math.min(FREQUENCY_RANGE, indexHz + 50); i++) {
-                const distance = Math.abs(i - indexHz);
-                spectrogram[i] += amplitudeScale * Math.exp(-(distance * distance) / 200);
-              }
-            });
-            for (let i = 0; i < FREQUENCY_RANGE; i++) spectrogram[i] += Math.random() * NOISE_LEVEL;
-            return spectrogram;
-          }
 
-          describe('EarthSync API Tests', () => {
-            let token;
-            let key;
+          describe('EarthSync Integration Tests', () => {
+              let authToken;
+              let encryptionKey;
 
-            beforeAll(async () => {
-              await redis.ping();
-            });
+              jest.setTimeout(TEST_TIMEOUT);
 
-            afterAll(async () => {
-              await redis.quit();
-            }, 15000);
+              beforeAll(async () => {
+                  try {
+                      await redis.connect();
+                      await historyRedis.connect();
+                      await redis.ping();
+                      await historyRedis.ping();
+                      console.log('Redis connections successful for tests.');
+                  } catch (err) {
+                      console.error('Redis connection failed:', err);
+                      throw new Error('Cannot connect to Redis, aborting tests.');
+                  }
+                  try {
+                      console.log('Attempting to register test user...');
+                      await axios.post(`${API_BASE_URL}/register`, { username: 'ci_testuser', password: 'ci_password123' });
+                      console.log('Test user registered.');
+                  } catch (err) {
+                      if (err.response && err.response.status === 409) {
+                          console.log('Test user already exists, proceeding.');
+                      } else {
+                          console.error('Failed to register test user:', err.response?.data || err.message);
+                          throw err;
+                      }
+                  }
+              });
 
-            test('Health endpoint', async () => {
-              const response = await axios.get(`${API_BASE_URL}/health`);
-              expect(response.status).toBe(200);
-              expect(response.data.status).toBe('OK');
-            });
+              afterAll(async () => {
+                  try {
+                     if (!authToken) {
+                         const loginRes = await axios.post(`${API_BASE_URL}/login`, { username: 'ci_testuser', password: 'ci_password123' });
+                         authToken = loginRes.data.token;
+                     }
+                     if (authToken) {
+                         await axios.delete(`${API_BASE_URL}/users/ci_testuser`, { headers: { Authorization: `Bearer ${authToken}` } });
+                         console.log('Test user cleaned up.');
+                     }
+                  } catch (err) {
+                      console.warn('Could not clean up test user:', err.response?.data || err.message);
+                  }
+                  await redis.quit();
+                  await historyRedis.quit();
+                  console.log('Redis connections closed.');
+              });
 
-            test('Register with valid data', async () => {
-              try {
-                await axios.delete(`${API_BASE_URL}/users/testuser`, { headers: { Authorization: `Bearer ${token}` } });
-              } catch (err) {}
-              const response = await axios.post(`${API_BASE_URL}/register`, { username: 'testuser', password: 'testpass123' });
-              expect(response.status).toBe(201);
-            });
+              test('GET /health should return 200 OK', async () => {
+                  const response = await axios.get(`${API_BASE_URL}/health`);
+                  expect(response.status).toBe(200);
+                  expect(response.data.status).toBe('OK');
+                  expect(response.data.redis_main).toBe('OK');
+                  expect(response.data.redis_stream).toBe('OK');
+                  expect(response.data.postgres).toBe('OK');
+              });
 
-            test('Login with valid credentials', async () => {
-              const response = await axios.post(`${API_BASE_URL}/login`, { username: 'testuser', password: 'testpass123' });
-              expect(response.status).toBe(200);
-              expect(response.data.token).toBeDefined();
-              token = response.data.token;
-            });
+              test('POST /login with valid credentials should return JWT token', async () => {
+                  const response = await axios.post(`${API_BASE_URL}/login`, { username: 'ci_testuser', password: 'ci_password123' });
+                  expect(response.status).toBe(200);
+                  expect(response.data.token).toBeDefined();
+                  expect(typeof response.data.token).toBe('string');
+                  authToken = response.data.token;
+              });
 
-            test('Key exchange', async () => {
-              const response = await axios.post(`${API_BASE_URL}/key-exchange`, {}, { headers: { Authorization: `Bearer ${token}` } });
-              expect(response.status).toBe(200);
-              expect(response.data.key).toBeDefined();
-              key = response.data.key;
-            });
+              test('POST /login with invalid credentials should return 401', async () => {
+                  await expect(
+                      axios.post(`${API_BASE_URL}/login`, { username: 'ci_testuser', password: 'wrong_password' })
+                  ).rejects.toThrow(/401/);
+              });
 
-            test('History with multi-detector data and frequency range', async () => {
-              await redis.keys('spectrogram_history:*').then(keys => redis.del(...keys));
-              for (let i = 0; i < 5; i++) {
-                const spectrogram = generateSpectrogram();
-                const timestamp = new Date(Date.now() - (60 - i * 10) * 60 * 1000).toISOString();
-                await redis.lpush('spectrogram_history:detector1', JSON.stringify({ spectrogram, timestamp, interval: 5000, detectorId: 'detector1', location: { lat: 40.7128, lon: -74.0060 } }));
-                await redis.lpush('spectrogram_history:detector2', JSON.stringify({ spectrogram, timestamp, interval: 5000, detectorId: 'detector2', location: { lat: 51.5074, lon: -0.1278 } }));
-                await redis.lpush('spectrogram_history:detector3', JSON.stringify({ spectrogram, timestamp, interval: 5000, detectorId: 'detector3', location: { lat: -33.8688, lon: 151.2093 } }));
-              }
-              const responseAll = await axios.get(`${API_BASE_URL}/history/1`, { headers: { Authorization: `Bearer ${token}` } });
-              expect(responseAll.status).toBe(200);
-              expect(Array.isArray(responseAll.data)).toBe(true);
-              expect(responseAll.data.length).toBe(3);
-              expect(responseAll.data[0].detectorId).toBeDefined();
-              expect(responseAll.data[0].location).toHaveProperty('lat');
-              const spectrogram = responseAll.data[0].spectrogram;
-              expect(spectrogram.length).toBeGreaterThan(1000);
-              expect(Math.max(...spectrogram)).toBeGreaterThan(10);
-            });
+              test('POST /key-exchange requires authentication and returns key', async () => {
+                  expect(authToken).toBeDefined();
+                  const response = await axios.post(`${API_BASE_URL}/key-exchange`, {}, {
+                      headers: { Authorization: `Bearer ${authToken}` }
+                  });
+                  expect(response.status).toBe(200);
+                  expect(response.data.key).toBeDefined();
+                  expect(response.data.key).toMatch(/^[a-f0-9]{64}$/);
+                  encryptionKey = response.data.key;
 
-            test('WebSocket connection with multi-detector data', async () => {
-              const ws = new WebSocket(`${WS_URL}/?token=${token}`);
-              await new Promise(resolve => ws.on('open', resolve));
-              const messagePromise = new Promise(resolve => ws.on('message', data => resolve(data.toString('utf8'))));
-              const spectrogram = generateSpectrogram();
-              await redis.xadd('spectrogram_stream', '*', 'data', JSON.stringify({ 
-                spectrogram, 
-                timestamp: new Date().toISOString(), 
-                interval: 5000, 
-                detectorId: 'detector_test', 
-                location: { lat: 40.7128, lon: -74.0060 } 
-              }));
-              const message = await messagePromise;
-              expect(message).toContain(':');
-              const [encrypted, iv] = message.split(':');
-              const encryptedBuf = CryptoJS.enc.Base64.parse(encrypted);
-              const ivBuf = CryptoJS.enc.Base64.parse(iv);
-              const keyWordArray = CryptoJS.enc.Hex.parse(key);
-              const decrypted = CryptoJS.AES.decrypt({ ciphertext: encryptedBuf }, keyWordArray, { iv: ivBuf, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
-              const decryptedData = JSON.parse(decrypted.toString(CryptoJS.enc.Utf8));
-              expect(decryptedData.spectrogram.length).toBeGreaterThan(1000);
-              ws.close();
-            });
+                  const storedKey = await redis.get(`ci_testuser`);
+                  expect(storedKey).toBe(encryptionKey);
+              });
+
+              test('GET /history/:hours requires authentication', async () => {
+                  await expect(
+                      axios.get(`${API_BASE_URL}/history/1`)
+                  ).rejects.toThrow(/401/);
+              });
+
+              test('GET /history/:hours returns valid data structure', async () => {
+                   expect(authToken).toBeDefined();
+                   const testData = {
+                       spectrogram: [Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(1)],
+                       timestamp: new Date().toISOString(),
+                       interval: 5000, detectorId: 'detector1',
+                       location: { lat: 10, lon: 10 }
+                   };
+                   await historyRedis.lpush('spectrogram_history:detector1', JSON.stringify(testData));
+                   await historyRedis.ltrim('spectrogram_history:detector1', 0, 999);
+
+                   const response = await axios.get(`${API_BASE_URL}/history/1`, {
+                       headers: { Authorization: `Bearer ${authToken}` }
+                   });
+
+                   expect(response.status).toBe(200);
+                   expect(Array.isArray(response.data)).toBe(true);
+                   const d1Data = response.data.find(d => d.detectorId === 'detector1');
+                   expect(d1Data).toBeDefined();
+                   expect(d1Data.location).toEqual({ lat: 10, lon: 10 });
+                   expect(Array.isArray(d1Data.spectrogram)).toBe(true);
+                   expect(d1Data.spectrogram.length).toBeGreaterThanOrEqual(EXPECTED_DOWNSAMPLED_LENGTH);
+                   expect(d1Data.spectrogram[0]).toEqual(1);
+
+                   await historyRedis.del('spectrogram_history:detector1');
+              });
+
+               test('GET /history/:hours with detectorId filter works', async () => {
+                   expect(authToken).toBeDefined();
+                    const ts = new Date().toISOString();
+                    const loc1 = { lat: 1, lon: 1 }, loc2 = { lat: 2, lon: 2 };
+                    const spec1_batch = [Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(1)];
+                    const spec2_batch = [Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(2)];
+                   await historyRedis.lpush('spectrogram_history:d_test_1', JSON.stringify({ spectrogram: spec1_batch, timestamp: ts, interval: 5000, detectorId: 'd_test_1', location: loc1 }));
+                   await historyRedis.lpush('spectrogram_history:d_test_2', JSON.stringify({ spectrogram: spec2_batch, timestamp: ts, interval: 5000, detectorId: 'd_test_2', location: loc2 }));
+
+                   const response = await axios.get(`${API_BASE_URL}/history/1?detectorId=d_test_2`, {
+                       headers: { Authorization: `Bearer ${authToken}` }
+                   });
+
+                   expect(response.status).toBe(200);
+                   expect(Array.isArray(response.data)).toBe(true);
+                   const d2Data = response.data.find(d => d.detectorId === 'd_test_2');
+                   expect(d2Data).toBeDefined();
+                   expect(d2Data.spectrogram.length).toEqual(EXPECTED_DOWNSAMPLED_LENGTH);
+                   expect(d2Data.spectrogram[0]).toBe(2);
+
+                   await historyRedis.del('spectrogram_history:d_test_1', 'spectrogram_history:d_test_2');
+               });
+
+               test('WebSocket connection requires valid token and receives encrypted data', async () => {
+                  expect(authToken).toBeDefined();
+                  expect(encryptionKey).toBeDefined();
+
+                  const ws = new WebSocket(`${WS_URL}/?token=${authToken}`);
+                  let receivedMessage = null;
+                  let connectionClosed = false;
+
+                  const connectionPromise = new Promise((resolve, reject) => {
+                      const timeout = setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
+                      ws.on('open', () => { clearTimeout(timeout); console.log('WebSocket connected for test.'); resolve(); });
+                      ws.on('error', (err) => { clearTimeout(timeout); console.error('WS Test Connection Error:', err); if (!connectionClosed) reject(new Error('WebSocket connection error')); });
+                      ws.on('close', (code, reason) => { clearTimeout(timeout); connectionClosed = true; if (code !== 1000) { console.log(`WS Test Closed Unexpectedly: ${code} ${reason}`); reject(new Error(`WebSocket closed unexpectedly: ${code}`)); } else { console.log('WS Test Closed Normally.'); } });
+                  });
+
+                  const messagePromise = new Promise((resolve, reject) => {
+                     const timeout = setTimeout(() => reject(new Error('WebSocket message timeout')), 10000);
+                      ws.on('message', (data) => { if (connectionClosed) return; clearTimeout(timeout); console.log('WebSocket message received in test.'); receivedMessage = data.toString('utf8'); resolve(); });
+                  });
+
+                  await connectionPromise;
+
+                  const testRawSpectrogram = Array(FREQUENCY_RANGE_POINTS).fill(Math.random() * 10);
+                  const messageData = {
+                      spectrogram: [testRawSpectrogram],
+                      timestamp: new Date().toISOString(),
+                      interval: 5000,
+                      detectorId: 'ws_test_detector',
+                      location: { lat: 30, lon: 30 }
+                  };
+                  await historyRedis.xadd('spectrogram_stream', '*', 'data', JSON.stringify(messageData));
+                  console.log('Test message published to Redis stream for WS test.');
+
+                  await messagePromise;
+
+                  expect(receivedMessage).toBeDefined();
+                  expect(typeof receivedMessage).toBe('string');
+                  expect(receivedMessage).toContain(':');
+
+                  const [encrypted, iv] = receivedMessage.split(':');
+                  const encryptedBuf = CryptoJS.enc.Base64.parse(encrypted);
+                  const ivBuf = CryptoJS.enc.Base64.parse(iv);
+                  const keyWordArray = CryptoJS.enc.Hex.parse(encryptionKey);
+
+                  const decryptedBytes = CryptoJS.AES.decrypt({ ciphertext: encryptedBuf }, keyWordArray, { iv: ivBuf, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
+                  const decryptedText = decryptedBytes.toString(CryptoJS.enc.Utf8);
+                  expect(decryptedText).toBeTruthy();
+
+                  const decryptedData = JSON.parse(decryptedText);
+                  expect(decryptedData.detectorId).toBe('ws_test_detector');
+                  expect(decryptedData.location).toEqual({ lat: 30, lon: 30 });
+                  expect(Array.isArray(decryptedData.spectrogram[0])).toBe(true);
+                  expect(decryptedData.spectrogram[0].length).toBe(EXPECTED_DOWNSAMPLED_LENGTH);
+
+                  ws.close(1000, 'Test complete');
+                  console.log('WebSocket test completed and connection closed.');
+              });
+
           });
           TEST_EOF
-          npx jest test.js --runInBand --detectOpenHandles
+
+          npx jest integration.test.js --detectOpenHandles --forceExit --verbose
         continue-on-error: false
 
-      - name: Clean up
+      - name: Clean up Docker Compose resources
         if: always()
+        working-directory: ./earthsync
         run: |
-          echo "Verifying docker-compose.yml before cleanup..."
-          grep -A 5 "healthcheck:" "$GITHUB_WORKSPACE/earthsync/docker-compose.yml" || echo "Healthcheck section not found or malformed"
-          docker compose down -v
+          echo "Cleaning up Docker resources..."
+          docker compose down -v --remove-orphans --timeout 30
         continue-on-error: false

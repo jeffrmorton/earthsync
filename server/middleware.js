@@ -1,32 +1,50 @@
 const jwt = require('jsonwebtoken');
 const winston = require('winston');
+require('dotenv').config();
 
-const logLevel = process.env.LOG_LEVEL || 'warn';
+const logLevel = process.env.LOG_LEVEL || 'info';
 const logger = winston.createLogger({
   level: logLevel,
   format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
-  transports: [new winston.transports.Console(), new winston.transports.File({ filename: 'server.log' })]
+  transports: [new winston.transports.Console({ format: winston.format.simple() })]
 });
-
-require('dotenv').config();
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
-  logger.error('JWT_SECRET missing');
-  process.exit(1);
+  logger.error('FATAL: JWT_SECRET is not defined for middleware.');
 }
 
-const authenticateToken = async (req, res, next) => {
+const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token required' });
+  const token = authHeader && authHeader.startsWith('Bearer ') && authHeader.split(' ')[1];
+
+  if (!token) {
+    logger.warn('Authentication failed: No token provided', { url: req.originalUrl });
+    return res.status(401).json({ error: 'Access denied. No token provided.' });
+  }
 
   try {
-    req.user = await jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    if (!decoded || !decoded.id || !decoded.username) {
+        logger.error('Authentication failed: Invalid token payload', { payload: decoded });
+        return res.status(403).json({ error: 'Invalid token payload.' });
+    }
+    req.user = decoded;
+    logger.debug('Authentication successful', { username: req.user.username, url: req.originalUrl });
     next();
+
   } catch (err) {
-    logger.error('Token verification failed', { error: err.message });
-    res.status(403).json({ error: 'Invalid token' });
+    if (err instanceof jwt.TokenExpiredError) {
+      logger.warn('Authentication failed: Token expired', { url: req.originalUrl, error: err.message });
+      return res.status(401).json({ error: 'Access denied. Token has expired.' });
+    }
+    if (err instanceof jwt.JsonWebTokenError) {
+      logger.warn('Authentication failed: Invalid token', { url: req.originalUrl, error: err.message });
+      return res.status(403).json({ error: 'Access denied. Invalid token.' });
+    }
+    logger.error('Authentication error: Unexpected issue during token verification', { url: req.originalUrl, error: err.message });
+    next(err);
   }
 };
 
