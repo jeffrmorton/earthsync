@@ -77,6 +77,11 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
 (Same as before - involves updating `docker-compose.yml`, optionally `prometheus.yml`, Grafana queries, and `redis-exporter` config).
 
 ## Troubleshooting
+-   **WebSocket Timeout in CI/Locally:** If the WS test fails with a timeout:
+    -   Check server logs (`docker compose logs server`) for errors during stream processing or WS broadcasting, especially around peak detection and key retrieval. Look for "WS send skip" messages.
+    -   Temporarily increase `LOG_LEVEL` to `debug` in `server/.env` and restart (`docker compose restart server`) for more detail.
+    -   Ensure Redis is healthy (`docker compose ps`).
+    -   Try increasing `WS_MESSAGE_TIMEOUT` in the `integration.test.js` file further if the server appears slow under load.
 -   **No Peaks Detected/Too Many Peaks:** Adjust peak detection parameters in `server/.env` and restart the server (`docker compose restart server`). Check server logs for peak detection details.
 -   **Data Ingest Issues:** Check server logs for API key/validation errors (esp. spectrogram length - must be 5501). Check request headers and JSON payload.
 -   **Historical Peak Charts Empty:** Ensure historical data exists (`docker compose exec redis redis-cli -a <password> SCAN 0 MATCH peaks:*`, `ZCARD peaks:<id>`). Check browser console for errors. Verify detector selection.
@@ -85,7 +90,6 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
 -   **Service Unhealthy**: Check logs, test healthcheck command.
 -   **Redis `overcommit_memory`**: Apply `vm.overcommit_memory=1` or disable saves.
 -   **No Data/Flat Chart**: Check browser console (F12). Check server/detector logs. Check Redis (`XLEN spectrogram_stream`, `XRANGE spectrogram_stream - + COUNT 10`, `SCAN 0 MATCH userkey:*`, `SCAN 0 MATCH spectrogram_history:*`).
--   **WebSocket Issues**: Check WS Status indicator. Check browser/server logs. Check JWT/key TTLs.
 -   **Grafana Issues**: Run `docker compose down -v` first. Check logs.
 -   **Settings Not Persisted**: Clear browser localStorage.
 

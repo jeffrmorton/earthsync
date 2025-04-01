@@ -28,7 +28,7 @@ const redisHost = process.env.REDIS_HOST;
 const redisPort = parseInt(process.env.REDIS_PORT, 10);
 const redisPassword = process.env.REDIS_PASSWORD;
 const INTERVAL_MS = parseInt(process.env.DETECTOR_INTERVAL_MS, 10) || 5000;
-const DETECTOR_BATCH_SIZE = parseInt(process.env.DETECTOR_BATCH_SIZE, 10) || 1;
+let DETECTOR_BATCH_SIZE = parseInt(process.env.DETECTOR_BATCH_SIZE, 10) || 1;
 const DETECTOR_ID = process.env.DETECTOR_ID || crypto.randomUUID();
 let LATITUDE = parseFloat(process.env.LATITUDE);
 let LONGITUDE = parseFloat(process.env.LONGITUDE);
@@ -92,6 +92,11 @@ async function publishSpectrogramBatch() {
   const message = { spectrogram: batch, timestamp: new Date().toISOString(), interval: INTERVAL_MS, detectorId: DETECTOR_ID, location: { lat: LATITUDE, lon: LONGITUDE } };
   const messageString = JSON.stringify(message);
   try {
+    // Ensure connected before attempting xadd
+    if (redisClient.status !== 'ready') {
+       logger.warn(`Redis not ready, skipping publish (${DETECTOR_ID})`);
+       return;
+    }
     const messageId = await redisClient.xadd('spectrogram_stream', '*', 'data', messageString);
     logger.info(`Batch published (${DETECTOR_ID})`, { messageId, batchSize: batch.length });
   } catch (err) { logger.error(`Failed publish batch (${DETECTOR_ID})`, { error: err.message }); }
@@ -100,7 +105,13 @@ async function publishSpectrogramBatch() {
 async function startDetector() {
   try {
     await redisClient.connect();
-    await redisClient.ping(); // Verify connection
+    logger.info(`Detector ${DETECTOR_ID} connecting to Redis...`);
+    // Wait until ready state or timeout
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Redis connection timeout')), 10000);
+        redisClient.once('ready', () => { clearTimeout(timeout); resolve(); });
+        redisClient.once('error', (err) => { clearTimeout(timeout); reject(err); }); // Fail fast on initial connect error
+    });
     logger.info(`Detector ${DETECTOR_ID} started. Pub interval ${INTERVAL_MS}ms, Batch ${DETECTOR_BATCH_SIZE}.`, { lat: LATITUDE.toFixed(4), lon: LONGITUDE.toFixed(4) });
     setInterval(publishSpectrogramBatch, INTERVAL_MS);
   } catch (err) { logger.error(`Detector ${DETECTOR_ID} failed start/connect`, { error: err.message }); process.exit(1); }

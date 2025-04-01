@@ -165,7 +165,7 @@ app.post('/key-exchange', apiLimiter, authenticateToken, async (req, res, next) 
 
 // Historical Data (Spectrogram Only)
 const historyValidationRules = [ param('hours').isInt({ min: 1, max: 72 }).withMessage('Hours must be 1-72.'), queryValidator('detectorId').optional().isString().trim().isLength({ min: 1, max: 50 }).withMessage('Invalid detector ID.') ];
-app.get('/history/:hours', apiLimiter, authenticateToken, historyValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged structure, logic was okay ... */
+app.get('/history/:hours', apiLimiter, authenticateToken, historyValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged ... */
   const hours = parseInt(req.params.hours, 10); const { detectorId } = req.query; const username = req.user.username; const cacheKey = `history_spec:${hours}:${detectorId || 'all'}`;
   try {
     const cached = await streamRedisClient.get(cacheKey);
@@ -195,7 +195,7 @@ app.get('/history/:hours', apiLimiter, authenticateToken, historyValidationRules
 
 // Historical Peak Data
 const peakHistoryValidationRules = [ param('hours').isInt({ min: 1, max: 72 }).withMessage('Hours must be 1-72.'), queryValidator('detectorId').optional().isString().trim().isLength({ min: 1, max: 50 }).withMessage('Invalid detector ID.') ];
-app.get('/history/peaks/:hours', apiLimiter, authenticateToken, peakHistoryValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged structure, logic was okay ... */
+app.get('/history/peaks/:hours', apiLimiter, authenticateToken, peakHistoryValidationRules, validateRequest, async (req, res, next) => { /* ... unchanged ... */
     const hours = parseInt(req.params.hours, 10); const { detectorId } = req.query; const username = req.user.username; const cacheKey = `history_peaks:${hours}:${detectorId || 'all'}`;
     try {
         const cached = await streamRedisClient.get(cacheKey); if (cached) { logger.info('Serving peak history from cache', { username, hours, detectorId }); return res.json(JSON.parse(cached)); }
@@ -294,135 +294,100 @@ function detectPeaksEnhanced(rawSpectrum) {
     const numericSpectrum = rawSpectrum.map(v => Number(v)).filter(v => !isNaN(v));
     if (numericSpectrum.length !== n) {
         logger.warn('Invalid values found in raw spectrum, peak detection might be affected.');
-        // Option: return [] or try to proceed with valid points if enough exist
         if (numericSpectrum.length < PEAK_SMOOTHING_WINDOW) return [];
-        // If proceeding, need to handle potential index mismatches - simpler to return []
-        return [];
+        return []; // Simplest to return empty if data is corrupted
     }
 
     // 1. Smoothing
     const smoothedSpectrum = smooth(numericSpectrum, PEAK_SMOOTHING_WINDOW);
 
-    // 2. Find potential peak candidates (local maxima)
+    // 2. Find potential peak candidates (local maxima above absolute threshold)
     const candidates = [];
     for (let i = 1; i < n - 1; i++) {
         if (smoothedSpectrum[i] > smoothedSpectrum[i - 1] && smoothedSpectrum[i] > smoothedSpectrum[i + 1] && smoothedSpectrum[i] >= PEAK_ABSOLUTE_THRESHOLD) {
             candidates.push({ index: i, amp: smoothedSpectrum[i] });
         }
     }
-
     if (candidates.length === 0) return [];
 
-    // 3. Calculate baseline (e.g., median or percentile of non-peak regions - simplified here as local minimums)
-    // A more robust baseline calculation might be needed for very noisy data.
-    // Simple baseline estimation: minimum value within a window around the peak candidate
-    const windowSizeForBaseline = PEAK_MIN_DISTANCE_POINTS * 2 + 1;
-
-    // 4. Filter by Prominence
+    // 3. Filter by Prominence
+    const windowSizeForProminence = PEAK_MIN_DISTANCE_POINTS * 2 + 1; // Wider window for baseline estimation
     const prominentPeaks = candidates.filter(candidate => {
         const i = candidate.index;
-        const windowStart = Math.max(0, i - Math.floor(windowSizeForBaseline / 2));
-        const windowEnd = Math.min(n, i + Math.floor(windowSizeForBaseline / 2) + 1);
-        let localMin = candidate.amp;
+        const windowStart = Math.max(0, i - Math.floor(windowSizeForProminence / 2));
+        const windowEnd = Math.min(n, i + Math.floor(windowSizeForProminence / 2) + 1);
+        let localMin = Infinity;
         for (let k = windowStart; k < windowEnd; k++) {
-            if (k !== i) { // Don't consider the peak itself for baseline
-               localMin = Math.min(localMin, smoothedSpectrum[k]);
-            }
+             if (k !== i) localMin = Math.min(localMin, smoothedSpectrum[k]);
         }
-        // Calculate local standard deviation (optional, could use global or rolling std dev)
-        let localSumSq = 0;
-        let localSum = 0;
-        for (let k = windowStart; k < windowEnd; k++) {
-            localSum += smoothedSpectrum[k];
-            localSumSq += smoothedSpectrum[k] * smoothedSpectrum[k];
-        }
+        // If localMin is still Infinity, it means the window is very small, use peak value itself? Or skip? Skip for now.
+        if (!isFinite(localMin)) return false;
+
+        // Simple std dev within the window as noise estimate
+        let localSumSq = 0; let localSum = 0;
+        for (let k = windowStart; k < windowEnd; k++) { localSum += smoothedSpectrum[k]; localSumSq += smoothedSpectrum[k] * smoothedSpectrum[k]; }
         const localMean = localSum / (windowEnd - windowStart);
         const localVariance = (localSumSq / (windowEnd - windowStart)) - (localMean * localMean);
-        const localStdDev = localVariance > 0 ? Math.sqrt(localVariance) : 0;
+        const localStdDev = localVariance > 0 ? Math.sqrt(localVariance) : 0.1; // Use a small floor for std dev
 
-        // Prominence: How much the peak stands out from the estimated baseline/noise
         const prominence = candidate.amp - localMin;
-        // Threshold can be combination of absolute and relative (factor * noise)
-        const prominenceThreshold = PEAK_PROMINENCE_FACTOR * (localStdDev || 0.5); // Use a minimum noise floor
+        const prominenceThreshold = PEAK_PROMINENCE_FACTOR * localStdDev;
         return prominence >= prominenceThreshold;
     });
-
     if (prominentPeaks.length === 0) return [];
 
-    // 5. Filter by Minimum Distance
+    // 4. Filter by Minimum Distance
     prominentPeaks.sort((a, b) => b.amp - a.amp); // Process highest peaks first
     const finalPeakIndices = [];
     const excludedIndices = new Set();
-
     for (const peak of prominentPeaks) {
         if (!excludedIndices.has(peak.index)) {
             finalPeakIndices.push(peak.index);
-            // Exclude points within PEAK_MIN_DISTANCE_POINTS on either side
             for (let k = 1; k <= PEAK_MIN_DISTANCE_POINTS; k++) {
-                excludedIndices.add(peak.index + k);
-                excludedIndices.add(peak.index - k);
+                excludedIndices.add(peak.index + k); excludedIndices.add(peak.index - k);
             }
         }
     }
-
     if (finalPeakIndices.length === 0) return [];
 
-    // 6. Calculate Properties (Frequency, Amplitude, Q-Factor) for final peaks
+    // 5. Calculate Properties for final peaks
     const finalPeaks = finalPeakIndices.map(index => {
-        // Use original (unsmoothed) data for precise amplitude and Q-factor if desired, or smoothed
-        const peakAmp = numericSpectrum[index]; // Or smoothedSpectrum[index]
+        const peakAmp = numericSpectrum[index]; // Use original amplitude for final value
         const peakFreq = index * FREQUENCY_RESOLUTION_HZ;
-
-        // Estimate FWHM using original data around the peak index found in smoothed data
         const halfMax = peakAmp / 2;
         let leftIndex = index, rightIndex = index;
         while (leftIndex > 0 && numericSpectrum[leftIndex] > halfMax) { leftIndex--; }
         while (rightIndex < n - 1 && numericSpectrum[rightIndex] > halfMax) { rightIndex++; }
 
-        // Interpolate edges for better FWHM
-        let fwhm = (rightIndex - leftIndex) * FREQUENCY_RESOLUTION_HZ; // Basic width
-        try { // Add interpolation guards
-            const y1 = numericSpectrum[leftIndex]; const y2 = numericSpectrum[leftIndex+1];
-            const leftInterp = (halfMax - y1) / (y2 - y1); // Linear interpolation factor
-            const x1 = numericSpectrum[rightIndex]; const x2 = numericSpectrum[rightIndex-1];
-            const rightInterp = (halfMax - x1) / (x2 - x1); // Linear interpolation factor
+        let fwhm = (rightIndex - leftIndex) * FREQUENCY_RESOLUTION_HZ;
+        try { // Interpolate edges for better FWHM
+            const y1 = numericSpectrum[leftIndex]; const y2 = numericSpectrum[leftIndex+1]; const y3 = numericSpectrum[rightIndex-1]; const y4 = numericSpectrum[rightIndex];
+            const leftInterp = (y2 !== y1) ? (halfMax - y1) / (y2 - y1) : 0.5; // Handle flat lines
+            const rightInterp = (y3 !== y4) ? (halfMax - y4) / (y3 - y4) : 0.5; // Handle flat lines
 
-            if(isFinite(leftInterp) && leftInterp >= 0 && leftInterp <= 1 &&
-               isFinite(rightInterp) && rightInterp >= 0 && rightInterp <= 1 ) {
-                 const interpolatedLeft = leftIndex + leftInterp;
-                 const interpolatedRight = rightIndex - rightInterp; // Subtract as we moved right->left
-                 fwhm = (interpolatedRight - interpolatedLeft) * FREQUENCY_RESOLUTION_HZ;
+            if(isFinite(leftInterp) && leftInterp >= 0 && leftInterp <= 1 && isFinite(rightInterp) && rightInterp >= 0 && rightInterp <= 1) {
+                 const interpolatedLeftIdx = leftIndex + leftInterp;
+                 const interpolatedRightIdx = rightIndex - rightInterp; // Interpolation factor is 0-1 from the *right* edge moving left
+                 fwhm = (interpolatedRightIdx - interpolatedLeftIdx) * FREQUENCY_RESOLUTION_HZ;
             }
         } catch(interpErr){ logger.debug("FWHM interpolation failed", {index, error: interpErr.message})}
 
-
         let qFactor = null;
-        if (fwhm > 1e-6) { // Avoid division by zero
-            qFactor = peakFreq / fwhm;
-        }
+        if (fwhm > 1e-6) { qFactor = peakFreq / fwhm; }
 
         return { freq: peakFreq, amp: peakAmp, qFactor: qFactor };
-    });
+    }).filter(p => p.amp >= PEAK_ABSOLUTE_THRESHOLD); // Final check on original amplitude
 
-    finalPeaks.sort((a,b) => a.freq - b.freq); // Sort by frequency
+    finalPeaks.sort((a,b) => a.freq - b.freq);
     return finalPeaks;
 }
 
 // --- Placeholder Functions ---
 async function trackPeaks(detectorId, currentPeaks, timestamp) {
     // TODO: Implement logic to compare currentPeaks with previous peaks for this detector.
-    // - Identify corresponding peaks (e.g., based on frequency proximity).
-    // - Calculate drift, amplitude change, Q-factor change.
-    // - Store or flag significant changes/trends.
-    // logger.debug("Peak tracking placeholder", { detectorId, count: currentPeaks.length, ts: timestamp });
 }
-
 async function detectTransients(detectorId, rawSpectrum, timestamp) {
     // TODO: Implement logic to detect anomalies.
-    // - Look for broadband energy spikes (e.g., power exceeds threshold across many frequencies).
-    // - Look for rapid changes compared to a baseline or previous spectrum.
-    // - Could use statistical methods (e.g., deviation from mean/median) or signal processing techniques.
-    // logger.debug("Transient detection placeholder", { detectorId, ts: timestamp });
 }
 
 
@@ -434,10 +399,7 @@ function encryptMessage(messageString, keyHex) {
     let encrypted = cipher.update(messageString, 'utf8', 'base64');
     encrypted += cipher.final('base64');
     return `${encrypted}:${iv.toString('base64')}`;
-  } catch (error) {
-      logger.error("Encryption failed", { error: error.message });
-      return null;
-  }
+  } catch (error) { logger.error("Encryption failed", { error: error.message }); return null; }
 }
 
 async function processStreamMessages() {
@@ -490,22 +452,23 @@ async function processStreamMessages() {
 
                             // --- Process First Raw Spectrum (Peaks, Track, Transients) ---
                             if (firstRawSpecForProcessing) {
+                                const peakDetectionStart = Date.now();
                                 allDetectedPeaksForWs = detectPeaksEnhanced(firstRawSpecForProcessing);
+                                const peakDetectionDuration = Date.now() - peakDetectionStart;
+                                logger.debug("Peak detection duration", { detectorId: parsedMessage.detectorId, durationMs: peakDetectionDuration, peakCount: allDetectedPeaksForWs.length });
+
                                 if (allDetectedPeaksForWs.length > 0) {
                                     peaksDetectedCounter.inc({ detectorId: parsedMessage.detectorId }, allDetectedPeaksForWs.length);
-                                    // Store only the peaks from the first spectrum in the sorted set for this timestamp
                                     const peakKey = `peaks:${parsedMessage.detectorId}`;
-                                    pipeline.zadd(peakKey, messageTimestampMs, JSON.stringify(allDetectedPeaksForWs)); // Store the array of peaks
+                                    pipeline.zadd(peakKey, messageTimestampMs, JSON.stringify(allDetectedPeaksForWs));
                                 }
-                                // --- Peak Tracking & Transient Detection Placeholders ---
                                 await trackPeaks(parsedMessage.detectorId, allDetectedPeaksForWs, messageTimestampMs);
                                 await detectTransients(parsedMessage.detectorId, firstRawSpecForProcessing, messageTimestampMs);
                             } else {
-                                allDetectedPeaksForWs = []; // Ensure it's empty if no valid first spectrum
+                                allDetectedPeaksForWs = [];
                                 logger.warn("No valid raw spectrum found in batch for peak detection", { messageId, detectorId: parsedMessage.detectorId });
                             }
 
-                            // Data to store/send
                             const dataToProcess = { ...parsedMessage, spectrogram: downsampledBatch, detectedPeaks: allDetectedPeaksForWs };
                             const messageString = JSON.stringify(dataToProcess);
 
@@ -514,46 +477,37 @@ async function processStreamMessages() {
                             pipeline.lpush(historyKey, messageString);
                             pipeline.ltrim(historyKey, 0, 999);
 
-                            // Execute Redis pipeline (ZADD peaks, LPUSH/LTRIM history)
                             await pipeline.exec();
 
                             // --- Broadcast ---
                             let sentCount = 0;
-                            let keyFoundCount = 0;
-                            let keyNotFoundCount = 0;
+                            logger.debug(`Broadcasting message ${messageId} to ${wss.clients.size} potential clients`, { detectorId: parsedMessage.detectorId });
                             for (const ws of wss.clients) {
+                                // Explicitly check readyState before attempting to get key or send
                                 if (ws.readyState === WebSocket.OPEN && ws.username) {
                                     const userRedisKey = `${ws.username}`;
                                     try {
-                                        const key = await redisClient.get(userRedisKey); // Use main client with prefix
+                                        const key = await redisClient.get(userRedisKey);
                                         if (key) {
-                                            keyFoundCount++;
+                                            // logger.debug(`Key found for ${ws.username}`, { keyPrefix: REDIS_KEY_PREFIX });
                                             const encryptedMessage = encryptMessage(messageString, key);
                                             if (encryptedMessage) {
                                                  ws.send(encryptedMessage, (err) => { if (err) logger.error('WS send error', { username: ws.username, error: err.message }); });
                                                  sentCount++;
                                             } else { logger.warn('WS send skip: encryption error', { username: ws.username }); }
-                                        } else {
-                                            keyNotFoundCount++;
-                                            logger.warn('WS send skip: No encryption key found', { username: ws.username });
-                                        }
-                                    } catch (redisErr) {
-                                        logger.error('WS send skip: Redis error getting key', {username: ws.username, error: redisErr.message});
-                                    }
+                                        } else { logger.warn('WS send skip: No key found in Redis', { username: ws.username, redisKey: REDIS_KEY_PREFIX + userRedisKey }); }
+                                    } catch (redisErr) { logger.error('WS send skip: Redis error getting key', {username: ws.username, error: redisErr.message}); }
+                                } else {
+                                     logger.debug('WS send skip: Client not open or no username', { username: ws.username, state: ws.readyState });
                                 }
                             }
-                             if (keyFoundCount > 0 || keyNotFoundCount > 0) {
-                                 logger.debug(`Broadcast attempt ${messageId}`, { detectorId: parsedMessage.detectorId, peaks: allDetectedPeaksForWs.length, clients: wss.clients.size, sent: sentCount, keysFound: keyFoundCount, keysNotFound: keyNotFoundCount });
-                             }
+                             logger.debug(`Broadcast ${messageId} complete`, { sent: sentCount });
 
                         } catch (processingError) {
                             logger.error('Error processing stream message', { messageId, detectorId: parsedMessage?.detectorId, error: processingError.message, stack: processingError.stack });
-                            // Still attempt to ACK to avoid reprocessing loops on bad data
                         } finally {
                             if (shouldAck) {
-                                await streamRedisClient.xack(streamKey, groupName, messageId).catch(ackErr => {
-                                    logger.error('Failed to ACK message', { messageId, error: ackErr.message });
-                                });
+                                await streamRedisClient.xack(streamKey, groupName, messageId).catch(ackErr => { logger.error('Failed to ACK message', { messageId, error: ackErr.message }); });
                             }
                         }
                     }
