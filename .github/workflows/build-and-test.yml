@@ -56,12 +56,19 @@ jobs:
           RETRY_INTERVAL=3
           for i in $(seq 1 $MAX_RETRIES); do
             echo "Attempt $i/$MAX_RETRIES: Checking server health..."
-            if curl -fsS --max-time 2 http://localhost:3000/health; then
+            # Check main services
+            SERVER_HEALTH=$(curl -fsS --max-time 2 http://localhost:3000/health)
+            CLIENT_HEALTH=$(curl -fsS --max-time 2 http://localhost:3001 || echo "Client check failed") # Allow client check failure briefly
+            if [[ "$SERVER_HEALTH" == *"OK"* ]]; then
               echo "Server is healthy!"
+              # Add a brief pause after server is healthy, before declaring success
+              sleep 5
               break
             fi
             if [ $i -eq $MAX_RETRIES ]; then
               echo "Server failed to become healthy within timeout."
+              echo "--- Server Health Response ---"
+              echo "$SERVER_HEALTH"
               echo "--- Server Logs ---"
               docker compose logs server || echo "Failed to get server logs."
               echo "--- Detector1 Logs ---"
@@ -83,7 +90,7 @@ jobs:
         run: npm install --save-dev axios ws ioredis bcryptjs jsonwebtoken jest@^29 crypto-js
         continue-on-error: false
 
-      - name: Run Integration Tests (v1.1.8)
+      - name: Run Integration Tests
         working-directory: ./earthsync
         env:
           REDIS_HOST: localhost
@@ -94,7 +101,7 @@ jobs:
           JWT_SECRET: 1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
           API_INGEST_KEY: changeme-in-production # Match server .env for testing
           NODE_ENV: test
-          JEST_TIMEOUT: 30000
+          JEST_TIMEOUT: 30000 # Keep timeout, but added delays in test
         run: |
           cat << 'TEST_EOF' > integration.test.js
           const axios = require('axios');
@@ -111,6 +118,8 @@ jobs:
           const DOWNSAMPLE_FACTOR = 5;
           const RAW_FREQUENCY_POINTS = 5501;
           const EXPECTED_DOWNSAMPLED_LENGTH = Math.ceil(RAW_FREQUENCY_POINTS / DOWNSAMPLE_FACTOR);
+
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
           // Main Redis client (for user keys)
           const redis = new Redis({
@@ -140,7 +149,7 @@ jobs:
           describe('EarthSync Integration Tests (v1.1.8)', () => {
               let authToken;
               let encryptionKey;
-              const testDetectorId = 'ci_detector';
+              const testDetectorIdBase = 'ci_detector';
 
               jest.setTimeout(TEST_TIMEOUT);
 
@@ -154,7 +163,7 @@ jobs:
                       // Clean up potential leftover test data
                       const userKey = await redis.keys(`ci_testuser`);
                       if (userKey.length > 0) await redis.del(userKey);
-                      const dataKeys = await streamRedis.keys(`*${testDetectorId}*`);
+                      const dataKeys = await streamRedis.keys(`*${testDetectorIdBase}*`);
                       if (dataKeys.length > 0) await streamRedis.del(dataKeys);
                       const streamKey = await streamRedis.keys('spectrogram_stream');
                       if (streamKey.length > 0) await streamRedis.del(streamKey); // Clear stream too
@@ -190,7 +199,7 @@ jobs:
                      // Clean up test data
                      const userKey = await redis.keys(`ci_testuser`);
                      if (userKey.length > 0) await redis.del(userKey);
-                     const dataKeys = await streamRedis.keys(`*${testDetectorId}*`);
+                     const dataKeys = await streamRedis.keys(`*${testDetectorIdBase}*`);
                      if (dataKeys.length > 0) await streamRedis.del(dataKeys);
                       const streamKey = await streamRedis.keys('spectrogram_stream');
                       if (streamKey.length > 0) await streamRedis.del(streamKey);
@@ -230,6 +239,7 @@ jobs:
               });
 
               test('POST /data-ingest accepts valid batch data', async () => {
+                  const testDetectorId = testDetectorIdBase + "_ingest";
                   const payload = {
                       detectorId: testDetectorId,
                       location: { lat: 1.23, lon: -4.56 },
@@ -246,7 +256,7 @@ jobs:
                   expect(response.data.messageId).toBeDefined();
 
                   // Check stream contains the raw data batch
-                  await new Promise(resolve => setTimeout(resolve, 200)); // Allow time for stream processing
+                  await sleep(300); // Allow slightly more time for stream processing
                   const streamMessages = await streamRedis.xrevrange('spectrogram_stream', '+', '-', 'COUNT', 1);
                   expect(streamMessages.length).toBeGreaterThan(0);
                   const streamData = JSON.parse(streamMessages[0][1][1]); // [messageId, [key, value]]
@@ -262,49 +272,56 @@ jobs:
 
                   const ws = new WebSocket(`${WS_URL}/?token=${authToken}`);
                   let receivedMessage = null;
+                  let wsError = null;
+                  let wsClosedCode = null;
 
                   const messagePromise = new Promise((resolve, reject) => {
+                     // Increased timeout slightly for CI
                      const timeout = setTimeout(() => {
                          ws.terminate(); // Close WS on timeout
-                         reject(new Error('WebSocket message timeout after 10s'));
-                     }, 10000);
+                         reject(new Error(`WebSocket message timeout after 12s (State: ${ws.readyState})`));
+                     }, 12000);
                       ws.on('message', (data) => { clearTimeout(timeout); receivedMessage = data.toString('utf8'); resolve(); });
-                      ws.on('error', (err) => { clearTimeout(timeout); reject(err); });
-                      ws.on('close', (code, reason) => { if (code !== 1000) reject(new Error(`WS closed unexpectedly: ${code} - ${reason}`)); });
+                      ws.on('error', (err) => { clearTimeout(timeout); wsError = err; reject(err); }); // Store error
+                      ws.on('close', (code, reason) => { wsClosedCode = code; if (code !== 1000) reject(new Error(`WS closed unexpectedly: ${code} - ${reason}`)); });
                   });
 
                   // Wait for WS connection before sending data
                   await new Promise((resolve, reject) => {
                       const timeout = setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
                       ws.on('open', () => { clearTimeout(timeout); console.log('WebSocket connected for peak test.'); resolve(); });
-                      ws.on('error', (err) => { clearTimeout(timeout); reject(err); });
+                      ws.on('error', (err) => { clearTimeout(timeout); reject(err); }); // Reject on immediate error too
                   });
 
+                  // Add a small delay after 'open' before sending, maybe helps CI
+                  await sleep(200);
 
                   // Generate test data with a clear peak
                   const rawSpectrogramWithPeak = Array(RAW_FREQUENCY_POINTS).fill(1.0);
                   const peakIndex = Math.floor(RAW_FREQUENCY_POINTS / 5); // ~11 Hz
-                  const freqPerPoint = 55 / (RAW_FREQUENCY_POINTS - 1);
-                  const peakFreq = peakIndex * freqPerPoint;
+                  const peakFreq = peakIndex * (55 / (RAW_FREQUENCY_POINTS - 1));
                   rawSpectrogramWithPeak[peakIndex - 2] = 3.0;
                   rawSpectrogramWithPeak[peakIndex - 1] = 8.0;
                   rawSpectrogramWithPeak[peakIndex] = 20.0; // Strong peak
                   rawSpectrogramWithPeak[peakIndex + 1] = 7.0;
                   rawSpectrogramWithPeak[peakIndex + 2] = 2.5;
 
-                  const ingestPayload = {
-                      detectorId: testDetectorId + "_ws", // Use unique detector ID for this test
-                      location: { lat: 45, lon: 45 },
-                      spectrograms: [rawSpectrogramWithPeak] // Send as a batch of one via ingest
-                  };
-                  // Clean previous data for this specific detector
-                  const peakKeyWs = `peaks:${ingestPayload.detectorId}`;
-                  await streamRedis.del(peakKeyWs);
+                  const testDetectorId = testDetectorIdBase + "_ws";
+                  const ingestPayload = { detectorId: testDetectorId, location: { lat: 45, lon: 45 }, spectrograms: [rawSpectrogramWithPeak] };
+                  const peakKeyWs = `peaks:${testDetectorId}`;
+                  await streamRedis.del(peakKeyWs); // Clean previous data
 
                   await axios.post(`${API_BASE_URL}/data-ingest`, ingestPayload, { headers: { 'X-API-Key': API_INGEST_KEY } });
                   console.log('Test message with peak ingested for WS test.');
 
-                  await messagePromise; // Wait for WS message
+                  try {
+                    await messagePromise; // Wait for WS message
+                  } catch(e) {
+                      console.error("WS Error:", wsError);
+                      console.error("WS Closed Code:", wsClosedCode);
+                      throw e; // Re-throw the error to fail the test
+                  }
+
 
                   expect(receivedMessage).toBeDefined();
                   expect(receivedMessage).toContain(':');
@@ -318,32 +335,28 @@ jobs:
                   const decryptedText = decryptedBytes.toString(CryptoJS.enc.Utf8);
                   const decryptedData = JSON.parse(decryptedText);
 
-                  expect(decryptedData.detectorId).toBe(ingestPayload.detectorId);
-                  // Check spectrogram data (downsampled)
+                  expect(decryptedData.detectorId).toBe(testDetectorId);
                   expect(Array.isArray(decryptedData.spectrogram)).toBe(true);
-                  expect(decryptedData.spectrogram.length).toBe(1); // Batch of 1 was processed
+                  expect(decryptedData.spectrogram.length).toBe(1);
                   expect(decryptedData.spectrogram[0].length).toBe(EXPECTED_DOWNSAMPLED_LENGTH);
-                  // Check peak data (from the first raw spec in the batch)
                   expect(Array.isArray(decryptedData.detectedPeaks)).toBe(true);
-                  expect(decryptedData.detectedPeaks.length).toBeGreaterThanOrEqual(1); // Allow for potential noise peaks, but expect at least ours
-                  const detectedPeak = decryptedData.detectedPeaks.find(p => Math.abs(p.freq - peakFreq) < 0.5); // Find our peak
-                  expect(detectedPeak).toBeDefined();
-                  expect(detectedPeak).toHaveProperty('freq');
-                  expect(detectedPeak).toHaveProperty('amp');
-                  expect(detectedPeak).toHaveProperty('qFactor'); // Check for Q-Factor
+                  // The enhanced peak detection might find more than 1 peak due to side lobes if not perfectly tuned
+                  expect(decryptedData.detectedPeaks.length).toBeGreaterThanOrEqual(1);
+                  const detectedPeak = decryptedData.detectedPeaks.find(p => Math.abs(p.freq - peakFreq) < 0.5); // Find the peak near 11Hz
+                  expect(detectedPeak).toBeDefined(); // Ensure the main peak was found
                   expect(detectedPeak.freq).toBeCloseTo(peakFreq, 1);
-                  expect(detectedPeak.amp).toBeCloseTo(20.0, 0); // Amplitude might be slightly affected by smoothing if peak is sharp
-                  expect(detectedPeak.qFactor).toBeGreaterThan(0); // Basic check for positive Q
+                  expect(detectedPeak.amp).toBeCloseTo(20.0, 0); // Amplitude might change slightly due to smoothing/interpolation
+                  expect(detectedPeak.qFactor).toBeGreaterThan(0);
                   console.log('Received and Decrypted Peaks via WS:', decryptedData.detectedPeaks);
 
                   // Check if peak was stored in Redis sorted set
                   const storedPeaks = await streamRedis.zrange(peakKeyWs, 0, -1);
-                  expect(storedPeaks.length).toBe(1); // One set of peaks stored
-                  const storedPeakDataArray = JSON.parse(storedPeaks[0]);
+                  expect(storedPeaks.length).toBe(1);
+                  const storedPeakDataArray = JSON.parse(storedPeaks[0]); // Server stores the array of peaks
                   expect(Array.isArray(storedPeakDataArray)).toBe(true);
-                  const storedPeak = storedPeakDataArray.find(p => Math.abs(p.freq - peakFreq) < 0.5);
-                  expect(storedPeak).toBeDefined();
-                  expect(storedPeak.freq).toBeCloseTo(peakFreq, 1);
+                  const storedMainPeak = storedPeakDataArray.find(p => Math.abs(p.freq - peakFreq) < 0.5);
+                  expect(storedMainPeak).toBeDefined();
+                  expect(storedMainPeak.freq).toBeCloseTo(peakFreq, 1);
 
 
                   ws.close(1000, 'Test complete');
@@ -352,47 +365,33 @@ jobs:
 
               test('GET /history/peaks/:hours returns historical peak data', async () => {
                   expect(authToken).toBeDefined();
-                  // Add some peak data to sorted set for testing
-                  const peakKeyHist = `peaks:${testDetectorId + "_hist"}`;
+                  const testDetectorId = testDetectorIdBase + "_hist";
+                  const peakKeyHist = `peaks:${testDetectorId}`;
                   const nowMs = Date.now();
-                  // Store peak sets as detected by server
                   const peakSet1 = [{ freq: 7.8, amp: 15, qFactor: 4 }];
                   const peakSet2 = [{ freq: 14.1, amp: 10, qFactor: 5 }, { freq: 7.9, amp: 12, qFactor: 4.2 }];
                   await streamRedis.zadd(peakKeyHist, nowMs - 60000, JSON.stringify(peakSet1)); // 1 min ago
                   await streamRedis.zadd(peakKeyHist, nowMs, JSON.stringify(peakSet2)); // Now
 
-                  const response = await axios.get(`${API_BASE_URL}/history/peaks/1?detectorId=${testDetectorId + "_hist"}`, {
-                      headers: { Authorization: `Bearer ${authToken}` }
-                  });
+                  const response = await axios.get(`${API_BASE_URL}/history/peaks/1?detectorId=${testDetectorId}`, { headers: { Authorization: `Bearer ${authToken}` } });
 
                   expect(response.status).toBe(200);
                   expect(Array.isArray(response.data)).toBe(true);
-                  expect(response.data.length).toBe(1); // Should group by detector
+                  expect(response.data.length).toBe(1);
                   const detectorHistory = response.data[0];
-                  expect(detectorHistory.detectorId).toBe(testDetectorId + "_hist");
+                  expect(detectorHistory.detectorId).toBe(testDetectorId);
                   expect(Array.isArray(detectorHistory.peaks)).toBe(true);
-                  expect(detectorHistory.peaks.length).toBe(2); // Two peak detection events
+                  expect(detectorHistory.peaks.length).toBe(2);
 
-                  // Check the structure returned by the API
                   const event1 = detectorHistory.peaks[0];
                   const event2 = detectorHistory.peaks[1];
-
-                  expect(event1).toHaveProperty('ts');
-                  expect(event1).toHaveProperty('peaks');
-                  expect(Array.isArray(event1.peaks)).toBe(true);
-                  expect(event1.ts).toBeCloseTo(nowMs - 60000, -3); // Allow ms difference
+                  expect(event1.ts).toBeCloseTo(nowMs - 60000, -3);
                   expect(event1.peaks).toEqual(peakSet1);
-
-                  expect(event2).toHaveProperty('ts');
-                  expect(event2).toHaveProperty('peaks');
-                  expect(Array.isArray(event2.peaks)).toBe(true);
                   expect(event2.ts).toBeCloseTo(nowMs, -3);
                   expect(event2.peaks).toEqual(peakSet2);
-
                   console.log('Retrieved Peak History:', JSON.stringify(detectorHistory.peaks));
 
-                  // Clean up test data
-                  await streamRedis.del(peakKeyHist);
+                  await streamRedis.del(peakKeyHist); // Clean up test data
               });
 
           });

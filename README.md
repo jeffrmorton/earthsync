@@ -1,65 +1,58 @@
 # EarthSync Project (v1.1.8)
 
 ## Overview
-EarthSync simulates, distributes, ingests, and visualizes time-series geospatial data, specifically modeling Schumann Resonances (SR). It features a React client, Node.js backend (API/WebSocket/Ingest), Node.js detectors, Redis, PostgreSQL, and Prometheus/Grafana monitoring.
+EarthSync simulates, distributes, ingests, and visualizes time-series geospatial data, modeling Schumann Resonances (SR). It features a React client, Node.js backend (API/WebSocket/Ingest), Node.js detectors, Redis, PostgreSQL, and Prometheus/Grafana monitoring.
 
-**Version 1.1.8 Enhancements:**
--   **Enhanced Peak Detection:** Server uses smoothing, prominence, minimum distance, and absolute threshold criteria (configurable via `.env`) for more robust peak identification on raw data. Q-Factor estimation uses interpolation.
--   **Historical Peak Visualization:** Client displays historical peak trends (Freq, Amp, Q-Factor) as 2D charts when in historical mode.
--   **Globe Enhancement:** Client globe points subtly change color based on recent average peak amplitude.
--   **Improved Client Feedback:** More specific error messages in the UI.
+**Version 1.1.8** introduces enhanced server-side peak detection (smoothing, prominence, configurable parameters), client-side visualization of historical peak trends (Frequency, Amplitude, Q-Factor), improved error feedback, and minor globe enhancements.
 
 ## API Documentation
-See `server/openapi.yaml` for the OpenAPI 3.0 specification (v1.1.8).
+See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major API *endpoint* changes from v1.1.7, but the underlying peak detection is improved.
 
-## Features
--   Real-time 3D Spectrogram Visualization (Downsampled Data).
--   Server-Side Analysis: Enhanced Peak detection (Freq, Amp, Q-Factor) on **raw** data.
--   Data Ingest API: Secure `/data-ingest` endpoint for batches of **raw** sensor data (5501 points/spectrum).
--   Responsive Chart & Globe: Interactive components with peak info tooltips.
--   Multi-Detector Support: Simulation + Ingest.
--   User Authentication (JWT).
--   Encrypted WebSockets (AES-256-CBC).
--   Stateless Server (Redis for keys).
--   Historical Data API:
-    -   `/history/:hours`: Downsampled spectrograms.
-    -   `/history/peaks/:hours`: Detected peak history (Freq, Amp, Q-Factor, Timestamp).
--   Enhanced Simulation: Diurnal variations, randomized parameters.
--   Client Controls & Persistence: Settings saved in `localStorage`.
--   Improved Feedback & Error Reporting.
--   Configurable Logging & Peak Detection.
--   Monitoring: Prometheus & Grafana dashboard.
--   CI/CD: GitHub Actions workflow.
--   Dockerized: Full stack via `docker-compose.yml`.
+## Features (v1.1.8)
+-   **Real-time 3D Visualization**: Plotly.js surface plot showing processed (downsampled) spectrogram data.
+-   **Server-Side Analysis**:
+    -   **Enhanced Peak Detection**: Now uses smoothing, prominence checks, minimum distance filtering, and absolute thresholding on **raw** data for more robust peak finding. Configurable via `server/.env`.
+    -   Q-Factor estimation with interpolation.
+    -   Detected peaks (Freq, Amp, Q-Factor) sent via WebSocket and stored historically.
+    -   Placeholders for future peak tracking and transient detection logic.
+-   **Data Ingest API**: Secure `/data-ingest` endpoint accepts batches of **raw** external sensor data (5501 points per spectrum).
+-   **Responsive Chart & Globe**:
+    -   Interactive spectrogram visualization.
+    -   Globe shows detector locations; point color varies subtly with recent average peak amplitude. Tooltips show latest peak details.
+-   **Historical Data & Visualization**:
+    -   Retrieve downsampled spectrogram data via `/history/:hours`.
+    -   Retrieve detected peak data (Freq, Amp, Q-Factor, Timestamp) via `/history/peaks/:hours`.
+    -   **New:** Client displays 2D line charts of historical peak Frequency, Amplitude, and Q-Factor vs. Time for the selected detector.
+    -   Data cached in Redis (Spectrograms in Lists, Peaks in Sorted Sets).
+-   **Multi-Detector Support**: Simulators run by default; augment/replace via the ingest API.
+-   **User Authentication**: JWT-based registration/login.
+-   **Encrypted WebSockets**: Real-time data (downsampled spectrogram + peaks) streaming (AES-256-CBC).
+-   **Stateless Server (Keys)**: User encryption keys stored in Redis.
+-   **Client Controls & Persistence**: Settings persist in `localStorage`.
+-   **Improved Feedback**: Loading indicators, WS status, more specific Snackbar alerts.
+-   **Backend Improvements**: Input validation, centralized error handling.
+-   **Configurable Logging & Peak Detection**: Via `.env` files.
+-   **Monitoring**: Prometheus & Grafana dashboard includes ingest, peak detection, and Redis metrics.
+-   **CI/CD**: GitHub Actions workflow builds and tests core features.
+-   **Dockerized**: Full stack defined in `docker-compose.yml`.
 
 ## Prerequisites
 -   Docker & Docker Compose (v2 recommended)
 -   Git
 -   Bash-compatible Shell
--   Optional Host Tweak: `sudo sysctl vm.overcommit_memory=1` (for Redis background saves)
+-   Recommended: `sudo sysctl vm.overcommit_memory=1` on host for Redis.
 
 ## Installation
 1.  `git clone <repository-url>` or save the setup script and run it (`./setup_earthsync.sh`).
 2.  `cd earthsync`
 3.  **(IMPORTANT)** If upgrading, clean up old volumes: `docker compose down -v`
-4.  Review `.env` files (especially `server/.env` for `API_INGEST_KEY` and peak detection params).
+4.  Review `.env` files (especially `server/.env` for `API_INGEST_KEY` and peak detection parameters).
 5.  `docker compose up --build -d`
 
 ## Usage
--   **Client**: `http://localhost:3001`
+-   **Client**: `http://localhost:3001` (Register/Login, view real-time or historical data, including new peak charts in historical mode).
 -   **API**: `http://localhost:3000`
 -   **Data Ingest**: `POST http://localhost:3000/data-ingest` (Requires `X-API-Key` header and valid JSON body - see `openapi.yaml`).
-    ```bash
-    # Example using curl (replace YOUR_API_KEY, send batch of 1)
-    curl -X POST http://localhost:3000/data-ingest \
-      -H "Content-Type: application/json" \
-      -H "X-API-Key: YOUR_API_KEY" \
-      -d '{
-            "detectorId": "my_sensor_01",
-            "location": {"lat": 50.0, "lon": 10.0},
-            "spectrograms": [ [<5501 raw amplitude values here>] ]
-          }'
-    ```
 -   **Prometheus**: `http://localhost:9090`
 -   **Grafana**: `http://localhost:3002` (Anonymous Viewer access)
 -   **Logs**: `docker compose logs -f <service_name>`
@@ -70,31 +63,31 @@ See `server/openapi.yaml` for the OpenAPI 3.0 specification (v1.1.8).
 
 ## Configuration
 -   Managed via `.env` files and `docker-compose.yml`.
--   **Server (`server/.env`):**
-    -   `API_INGEST_KEY`: **Set a secure key for production.**
+-   Set `API_INGEST_KEY` in `server/.env`.
+-   Adjust peak detection parameters in `server/.env`:
     -   `PEAK_SMOOTHING_WINDOW`: Points for moving average (odd integer, default 5).
-    -   `PEAK_PROMINENCE_FACTOR`: Factor of noise level for prominence (default 1.5).
-    -   `PEAK_MIN_DISTANCE_HZ`: Min frequency separation between peaks (default 1.0).
-    -   `PEAK_ABSOLUTE_THRESHOLD`: Minimum amplitude for a peak candidate (default 1.0).
--   Other env vars control ports, credentials, logging, etc.
+    -   `PEAK_PROMINENCE_FACTOR`: Sensitivity relative to local noise (float > 0, default 1.5).
+    -   `PEAK_MIN_DISTANCE_HZ`: Minimum frequency separation between peaks (float > 0, default 1.0).
+    -   `PEAK_ABSOLUTE_THRESHOLD`: Minimum amplitude for a peak candidate (float >= 0, default 1.0).
 
 ## Monitoring Details
--   Grafana Dashboard includes panels for system health, API/WS stats, Redis usage, and data flow metrics (ingest, peaks detected).
+-   Grafana Dashboard updated to reflect metrics accurately.
 
 ## Adding More Simulated Detectors
-(Same process as v1.1.7 - see previous README section if needed).
+(Same as before - involves updating `docker-compose.yml`, optionally `prometheus.yml`, Grafana queries, and `redis-exporter` config).
 
 ## Troubleshooting
--   **Data Ingest Issues:** Check server logs (`docker compose logs server`) for API key/validation errors (esp. spectrogram length - must be 5501). Ensure `Content-Type: application/json`, correct `X-API-Key`, and valid JSON payload (`spectrograms` array).
--   **Peak Detection Issues:** Check server logs. Check `peaks_detected_total` metric in Grafana. Adjust peak detection params in `server/.env` and restart (`docker compose up -d --build server`). Check client sidebar/tooltips/historical charts. Check Redis (`SCAN 0 MATCH peaks:*`, `ZCARD peaks:<id>`, `ZRANGE peaks:<id> 0 -1 WITHSCORES`).
--   **Build Failures**: Check Docker daemon status, Dockerfile syntax, `npm install` logs. Use `docker compose build --no-cache <service_name>`.
--   **Connection Issues**: Check `docker compose ps`, logs, `.env` files, host port conflicts.
--   **Service Unhealthy**: Check service logs, test healthcheck command manually inside container (`docker compose exec <service_name> <healthcheck_cmd>`).
--   **Redis `overcommit_memory`**: Apply `vm.overcommit_memory=1` or disable saves in Redis config (not default here).
--   **No Data/Flat Chart**: Check browser console (F12). Check server/detector logs. Check Redis stream (`XLEN spectrogram_stream`, `XRANGE spectrogram_stream - + COUNT 10`) and other keys (`SCAN 0 MATCH userkey:*`, `SCAN 0 MATCH spectrogram_history:*`).
--   **WebSocket Issues**: Check WS Status indicator in client UI. Check browser/server logs. Check JWT/key TTLs. Check network policies/firewalls.
--   **Grafana Issues**: Try `docker compose down -v && docker compose up -d --build`. Check Grafana logs (`docker compose logs grafana`).
--   **Settings Not Persisted**: Clear browser localStorage for the client's origin (`http://localhost:3001`).
+-   **No Peaks Detected/Too Many Peaks:** Adjust peak detection parameters in `server/.env` and restart the server (`docker compose restart server`). Check server logs for peak detection details.
+-   **Data Ingest Issues:** Check server logs for API key/validation errors (esp. spectrogram length - must be 5501). Check request headers and JSON payload.
+-   **Historical Peak Charts Empty:** Ensure historical data exists (`docker compose exec redis redis-cli -a <password> SCAN 0 MATCH peaks:*`, `ZCARD peaks:<id>`). Check browser console for errors. Verify detector selection.
+-   **Build Failures**: Check Docker daemon, Dockerfile syntax, `npm install` logs. Use `docker compose build --no-cache <service_name>`.
+-   **Connection Issues**: Check `docker compose ps`, logs, `.env` files, port conflicts.
+-   **Service Unhealthy**: Check logs, test healthcheck command.
+-   **Redis `overcommit_memory`**: Apply `vm.overcommit_memory=1` or disable saves.
+-   **No Data/Flat Chart**: Check browser console (F12). Check server/detector logs. Check Redis (`XLEN spectrogram_stream`, `XRANGE spectrogram_stream - + COUNT 10`, `SCAN 0 MATCH userkey:*`, `SCAN 0 MATCH spectrogram_history:*`).
+-   **WebSocket Issues**: Check WS Status indicator. Check browser/server logs. Check JWT/key TTLs.
+-   **Grafana Issues**: Run `docker compose down -v` first. Check logs.
+-   **Settings Not Persisted**: Clear browser localStorage.
 
 ## License
 MIT License. See [LICENSE](LICENSE) file.

@@ -184,7 +184,9 @@ services:
     environment:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-password}
+      # Checks specific list lengths (spectrogram history)
       - REDIS_EXPORTER_CHECK_SINGLE_KEYS=spectrogram_history:detector1,spectrogram_history:detector2,spectrogram_history:detector3
+      # Counts keys matching patterns (user keys, peak sets, spectrogram lists)
       - REDIS_EXPORTER_CHECK_KEY_PATTERNS=userkey:*,peaks:*,spectrogram_history:*
       - LOG_LEVEL=${REDIS_EXPORTER_LOG_LEVEL:-warn}
     ports:

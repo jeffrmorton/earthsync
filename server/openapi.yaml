@@ -1,10 +1,7 @@
 openapi: 3.0.3
 info:
   title: EarthSync Server API
-  description: |-
-    API for managing users, key exchange, data ingest, and historical data retrieval (spectrograms and peaks).
-    Includes enhanced server-side peak detection (Freq, Amp, Q-Factor) on raw data with configurable parameters.
-    Version 1.1.8
+  description: API for managing users, key exchange, data ingest, and historical data retrieval (spectrograms and peaks). Includes enhanced server-side peak detection (Freq, Amp, Q-Factor) on raw data with smoothing, prominence checks.
   version: 1.1.8
 servers:
   - url: http://localhost:3000
@@ -222,8 +219,8 @@ components:
       type: object
       properties:
         freq: { type: number, format: float, description: "Detected peak frequency in Hz", example: 7.81 }
-        amp: { type: number, format: float, description: "Detected peak amplitude (from raw spectrum)", example: 15.3 }
-        qFactor: { type: number, format: float, nullable: true, description: "Estimated Quality Factor (Center Freq / FWHM), interpolated", example: 4.5 }
+        amp: { type: number, format: float, description: "Detected peak amplitude", example: 15.3 }
+        qFactor: { type: number, format: float, nullable: true, description: "Estimated Quality Factor (Center Freq / FWHM)", example: 4.5 }
       required: [freq, amp, qFactor]
 
     HistoricalPeakEntry:
@@ -258,7 +255,7 @@ components:
         interval: { type: number, description: "Interval in ms (0 for ingested data)", example: 5000 }
         spectrogram: {
           type: array,
-          description: "Array of downsampled spectrogram rows (usually just one row per message). Length depends on downsample factor (approx 1101).",
+          description: "Array of downsampled spectrogram rows (usually just one row per message).",
           items: {
             type: array,
             items: { type: number, format: float },
