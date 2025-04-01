@@ -30,3 +30,17 @@ code {
 .fade-in {
   animation: fadeIn 0.5s ease-in-out;
 }
+
+/* Ensure plot containers take full height */
+.plot-container {
+    width: 100%;
+    height: 100%;
+}
+
+.historical-plots-container {
+    margin-top: 20px; /* Add some space below the main spectrogram */
+    padding: 10px;
+    border: 1px solid rgba(128, 128, 128, 0.3);
+    border-radius: 4px;
+    background-color: rgba(0,0,0,0.02); /* Slight background */
+}

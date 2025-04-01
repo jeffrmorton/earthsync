@@ -50,7 +50,6 @@ if (isNaN(LATITUDE) || isNaN(LONGITUDE)) {
 }
 
 // --- Redis Client Setup ---
-// Detector only needs to publish to stream, no prefix needed.
 const redisClient = new Redis({
   host: redisHost,
   port: redisPort,
@@ -68,9 +67,9 @@ redisClient.on('connect', () => logger.info(`Redis client connected (${DETECTOR_
 redisClient.on('reconnecting', () => logger.info(`Redis client reconnecting (${DETECTOR_ID})...`));
 
 // --- Simulation Parameters ---
-const FREQUENCY_RANGE_POINTS = 5501;
-const HZ_PER_POINT = 55 / (FREQUENCY_RANGE_POINTS - 1);
-const POINTS_PER_HZ = (FREQUENCY_RANGE_POINTS - 1) / 55;
+const RAW_FREQUENCY_POINTS = 5501;
+const HZ_PER_POINT = 55 / (RAW_FREQUENCY_POINTS - 1);
+const POINTS_PER_HZ = (RAW_FREQUENCY_POINTS - 1) / 55;
 
 const SCHUMANN_FREQUENCIES = [7.83, 14.3, 20.8, 27.3, 33.8, 39.0, 45.0, 51.0];
 const BASE_NOISE_LEVEL = 1.5;
@@ -84,7 +83,7 @@ const AMPLITUDE_VARIATION_FACTOR = 0.4;
 const AMPLITUDE_CYCLE_DURATION_MS = 24 * 60 * 60 * 1000;
 
 function generateSpectrogram() {
-  const spectrogram = new Array(FREQUENCY_RANGE_POINTS).fill(0);
+  const spectrogram = new Array(RAW_FREQUENCY_POINTS).fill(0);
 
   const now = Date.now();
   const timeOfDayFactor = Math.sin((2 * Math.PI * (now % AMPLITUDE_CYCLE_DURATION_MS)) / AMPLITUDE_CYCLE_DURATION_MS - (Math.PI / 2));
@@ -92,7 +91,7 @@ function generateSpectrogram() {
   const currentBaseAmplitude = BASE_AMPLITUDE * amplitudeModulation;
 
   const currentNoiseLevel = BASE_NOISE_LEVEL * (0.8 + Math.random() * 0.4) * (1 + 0.2 * timeOfDayFactor);
-  for (let i = 0; i < FREQUENCY_RANGE_POINTS; i++) {
+  for (let i = 0; i < RAW_FREQUENCY_POINTS; i++) {
     spectrogram[i] += Math.random() * currentNoiseLevel;
   }
 
@@ -101,23 +100,24 @@ function generateSpectrogram() {
     const currentFreq = baseFreq + freqShift;
     const centerIndex = Math.round(currentFreq * POINTS_PER_HZ);
 
-    const modeAmplitude = currentBaseAmplitude * Math.pow(AMPLITUDE_DECREASE_FACTOR, index);
+    const modeAmplitude = currentBaseAmplitude * Math.pow(AMPLITUDE_DECREASE_FACTOR, index) * (0.8 + Math.random() * 0.4); // Add random amplitude variation per mode
 
     const peakSharpness = PEAK_SHARPNESS_BASE + (Math.random() - 0.5) * 2 * PEAK_SHARPNESS_VARIATION;
 
-    const peakWidthPoints = Math.round(Math.sqrt(peakSharpness * 6) * 1.5);
+    const peakWidthPoints = Math.max(3, Math.round(Math.sqrt(peakSharpness * 6) * 1.5)); // Ensure minimum width
 
     const startIndex = Math.max(0, centerIndex - peakWidthPoints);
-    const endIndex = Math.min(FREQUENCY_RANGE_POINTS, centerIndex + peakWidthPoints);
+    const endIndex = Math.min(RAW_FREQUENCY_POINTS, centerIndex + peakWidthPoints);
 
     for (let i = startIndex; i < endIndex; i++) {
       const distanceSq = (i - centerIndex) * (i - centerIndex);
-      spectrogram[i] += modeAmplitude * Math.exp(-distanceSq / peakSharpness);
+      // Gaussian peak shape
+      spectrogram[i] += modeAmplitude * Math.exp(-distanceSq / (2 * (peakSharpness / 2.355) * (peakSharpness / 2.355))); // Using FWHM related sigma
     }
   });
 
-  for (let i = 0; i < FREQUENCY_RANGE_POINTS; i++) {
-    spectrogram[i] = Math.max(0, spectrogram[i]);
+  for (let i = 0; i < RAW_FREQUENCY_POINTS; i++) {
+    spectrogram[i] = Math.max(0, spectrogram[i]); // Ensure non-negative
   }
 
   return spectrogram;
@@ -130,7 +130,7 @@ async function publishSpectrogramBatch() {
   }
 
   const message = {
-    spectrogram: batch,
+    spectrogram: batch, // Send raw batch
     timestamp: new Date().toISOString(),
     interval: INTERVAL_MS,
     detectorId: DETECTOR_ID,
@@ -151,7 +151,7 @@ async function startDetector() {
   try {
     await redisClient.connect();
     await redisClient.ping();
-    logger.info(`Detector ${DETECTOR_ID} started. Publishing every ${INTERVAL_MS}ms.`, { lat: LATITUDE.toFixed(4), lon: LONGITUDE.toFixed(4) });
+    logger.info(`Detector ${DETECTOR_ID} started. Publishing every ${INTERVAL_MS}ms. Batch size ${DETECTOR_BATCH_SIZE}.`, { lat: LATITUDE.toFixed(4), lon: LONGITUDE.toFixed(4) });
     setInterval(publishSpectrogramBatch, INTERVAL_MS);
   } catch (err) {
     logger.error(`Detector ${DETECTOR_ID} failed to start or connect to Redis.`, { error: err.message });

@@ -1,8 +1,11 @@
 openapi: 3.0.3
 info:
   title: EarthSync Server API
-  description: API for managing users, key exchange, and historical spectrogram data in the EarthSync project. Includes validation and error handling details.
-  version: 1.1.0
+  description: |-
+    API for managing users, key exchange, data ingest, and historical data retrieval (spectrograms and peaks).
+    Includes enhanced server-side peak detection (Freq, Amp, Q-Factor) on raw data with configurable parameters.
+    Version 1.1.8
+  version: 1.1.8
 servers:
   - url: http://localhost:3000
     description: Development Server (HTTP)
@@ -22,7 +25,8 @@ paths:
                 properties:
                   status: { type: string, example: OK }
                   uptime: { type: number, example: 123.45 }
-                  redis: { type: string, example: OK }
+                  redis_main: { type: string, example: OK }
+                  redis_stream: { type: string, example: OK }
                   postgres: { type: string, example: OK }
         '500':
           description: Internal server error (e.g., dependency connection failed).
@@ -39,30 +43,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RegisterCredentials' }
       responses:
-        '201':
-          description: User registered successfully.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message: { type: string, example: Registration successful }
-        '400':
-          description: Invalid input (validation failed, e.g., username format, password length).
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '409':
-          description: Username already exists.
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '429':
-          description: Too many registration attempts (rate limited).
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '500':
-          description: Internal server error during registration.
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
+        '201': { $ref: '#/components/responses/RegistrationSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
 
   /login:
     post:
@@ -74,30 +59,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/LoginCredentials' }
       responses:
-        '200':
-          description: Login successful. Returns a JWT token.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  token: { type: string, description: "JWT token for authenticated requests", example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." }
-        '400':
-          description: Invalid input (missing username or password).
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '401':
-          description: Authentication failed (invalid username or password).
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '429':
-          description: Too many login attempts (rate limited).
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '500':
-          description: Internal server error during login.
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
+        '200': { $ref: '#/components/responses/LoginSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
 
   /key-exchange:
     post:
@@ -105,34 +71,38 @@ paths:
       tags: [WebSocket]
       security: [{ bearerAuth: [] }]
       responses:
-        '200':
-          description: Key exchanged successfully. Returns the encryption key. Client must store this key for decryption. The key is stored server-side associated with the user session (in Redis).
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  key: { type: string, description: "AES-256 encryption key (hex encoded)", example: "a1b2c3d4e5f6..." }
-        '401':
-          description: Unauthorized (missing, invalid, or expired token).
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '403':
-           description: Forbidden (token may be valid but lacks permission - not used here currently).
-           content:
-             application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '429':
-           description: Too many requests (rate limited).
-           content:
-             application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '500':
-          description: Internal server error during key exchange.
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
+        '200': { $ref: '#/components/responses/KeyExchangeSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /data-ingest:
+    post:
+      summary: Ingest a batch of raw spectrogram data from an external source
+      tags: [Data]
+      parameters:
+        - name: X-API-Key
+          in: header
+          required: true
+          schema: { type: string }
+          description: The secret API key required for data ingestion.
+      requestBody:
+        required: true
+        description: Payload containing a batch of raw spectra data points from one detector.
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestDataPayload' }
+      responses:
+        '202': { $ref: '#/components/responses/DataAccepted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /history/{hours}:
     get:
-      summary: Retrieve historical spectrogram data
+      summary: Retrieve historical spectrogram data (processed)
       tags: [Data]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -145,35 +115,37 @@ paths:
           in: query
           required: false
           schema: { type: string, example: "detector1", maxLength: 50 }
-          description: Optional. Filter data by a specific detector ID. If omitted, returns data for all detectors.
+          description: Optional. Filter data by a specific detector ID.
       responses:
-        '200':
-          description: Historical data retrieved successfully. Returns an array of detector data.
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/DetectorHistory' }
-        '400':
-          description: Invalid input (hours parameter out of range, invalid detectorId format).
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '401':
-           description: Unauthorized (missing, invalid, or expired token).
-           content:
-             application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '403':
-           description: Forbidden (not used here currently).
-           content:
-             application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '429':
-           description: Too many requests (rate limited).
-           content:
-             application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '500':
-          description: Internal server error fetching history.
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
+        '200': { $ref: '#/components/responses/HistorySpectrogramSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /history/peaks/{hours}:
+    get:
+      summary: Retrieve historical detected peak data
+      tags: [Data]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: hours
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 72 }
+          description: Number of hours of historical peak data to retrieve (1-72).
+        - name: detectorId
+          in: query
+          required: false
+          schema: { type: string, example: "detector1", maxLength: 50 }
+          description: Optional. Filter peak data by a specific detector ID.
+      responses:
+        '200': { $ref: '#/components/responses/HistoryPeaksSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
 
   /users/{username}:
     delete:
@@ -187,63 +159,21 @@ paths:
           schema: { type: string, minLength: 3, maxLength: 30, pattern: "^[a-zA-Z0-9_]+$" }
           description: The username of the account to delete. Must match the authenticated user.
       responses:
-        '200':
-          description: User deleted successfully.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message: { type: string, example: User deleted successfully }
-        '400':
-           description: Invalid input (username format mismatch).
-           content:
-             application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '401':
-           description: Unauthorized (missing, invalid, or expired token).
-           content:
-             application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '403':
-           description: Forbidden (trying to delete another user's account).
-           content:
-             application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '404':
-          description: User not found.
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '429':
-            description: Too many requests (rate limited).
-            content:
-              application/json: { $ref: '#/components/schemas/ErrorResponse' }
-        '500':
-          description: Internal server error during deletion.
-          content:
-            application/json: { $ref: '#/components/schemas/ErrorResponse' }
+        '200': { $ref: '#/components/responses/UserDeleteSuccess' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
 
   /metrics:
     get:
       summary: Prometheus metrics endpoint
       tags: [Status]
       responses:
-        '200':
-          description: Prometheus metrics exposed in text format.
-          content:
-            text/plain:
-              schema:
-                type: string
-                example: |
-                  # HELP http_requests_total Total number of HTTP requests
-                  # TYPE http_requests_total counter
-                  http_requests_total{method="GET",route="/health",status="200"} 10
-                  # HELP websocket_connections_active Number of active WebSocket connections
-                  # TYPE websocket_connections_active gauge
-                  websocket_connections_active 2
-                  ...
-        '500':
-          description: Internal server error generating metrics.
-          content:
-            text/plain:
-              schema: { type: string }
+        '200': { $ref: '#/components/responses/MetricsSuccess' }
+        '500': { $ref: '#/components/responses/InternalServerErrorText' }
 
 components:
   schemas:
@@ -268,8 +198,84 @@ components:
         lon: { type: number, format: float, example: -74.0060 }
       required: [lat, lon]
 
-    DetectorHistory:
+    IngestDataPayload:
       type: object
+      properties:
+        detectorId: { type: string, maxLength: 50, example: "external_sensor_alpha" }
+        timestamp: { type: string, format: "date-time", example: "2025-04-01T16:30:00Z", description: "Timestamp in ISO 8601 format (UTC recommended). Optional, defaults to server time." }
+        location: { $ref: '#/components/schemas/Location' }
+        spectrograms: {
+          type: array,
+          description: "Array of raw spectrogram arrays. Each sub-array must have exactly 5501 non-negative amplitude values.",
+          items: {
+            type: array,
+            items: { type: number, format: float, minimum: 0 },
+            minItems: 5501,
+            maxItems: 5501
+          },
+          minItems: 1,
+          example: [ [0.1, 0.5, ..., 0.3], [0.2, 0.4, ..., 0.2] ]
+        }
+      required: [detectorId, location, spectrograms]
+
+    DetectedPeak:
+      type: object
+      properties:
+        freq: { type: number, format: float, description: "Detected peak frequency in Hz", example: 7.81 }
+        amp: { type: number, format: float, description: "Detected peak amplitude (from raw spectrum)", example: 15.3 }
+        qFactor: { type: number, format: float, nullable: true, description: "Estimated Quality Factor (Center Freq / FWHM), interpolated", example: 4.5 }
+      required: [freq, amp, qFactor]
+
+    HistoricalPeakEntry:
+       type: object
+       properties:
+         ts: { type: number, format: int64, description: "Timestamp of the peak detection (Unix Milliseconds)", example: 1711994676123 }
+         peaks: {
+           type: array,
+           description: "Array of peaks detected at this timestamp.",
+           items: { $ref: '#/components/schemas/DetectedPeak' }
+         }
+       required: [ts, peaks]
+
+    DetectorPeakHistory:
+        type: object
+        properties:
+          detectorId: { type: string, example: "detector1" }
+          peaks: {
+            type: array,
+            description: "Array of peak detection events, sorted by timestamp.",
+            items: { $ref: '#/components/schemas/HistoricalPeakEntry' }
+          }
+        required: [detectorId, peaks]
+
+    WebSocketMessageData:
+      type: object
+      description: "Data structure sent over WebSocket after server processing."
+      properties:
+        detectorId: { type: string, example: "detector1" }
+        timestamp: { type: string, format: "date-time", example: "2025-04-01T16:30:05Z" }
+        location: { $ref: '#/components/schemas/Location' }
+        interval: { type: number, description: "Interval in ms (0 for ingested data)", example: 5000 }
+        spectrogram: {
+          type: array,
+          description: "Array of downsampled spectrogram rows (usually just one row per message). Length depends on downsample factor (approx 1101).",
+          items: {
+            type: array,
+            items: { type: number, format: float },
+            example: [ [0.2, 0.6, 1.5, ..., 0.4] ]
+          }
+        }
+        detectedPeaks: {
+          type: array,
+          items: { $ref: '#/components/schemas/DetectedPeak' },
+          description: "Array of peaks detected in the first raw spectrogram of this batch."
+        }
+      required: [detectorId, timestamp, location, interval, spectrogram, detectedPeaks]
+
+
+    DetectorSpectrogramHistory:
+      type: object
+      description: "Data structure returned by the /history endpoint."
       properties:
         detectorId: { type: string, example: "detector1" }
         location: { $ref: '#/components/schemas/Location' }
@@ -286,12 +292,90 @@ components:
         error: { type: string, description: "A description of the error.", example: "Invalid username or password" }
       required: [error]
 
+  responses:
+    RegistrationSuccess:
+      description: User registered successfully.
+      content:
+        application/json:
+          schema: { type: object, properties: { message: { type: string, example: Registration successful } } }
+    LoginSuccess:
+      description: Login successful. Returns a JWT token.
+      content:
+        application/json:
+          schema: { type: object, properties: { token: { type: string, description: "JWT token for authenticated requests", example: "eyJhbGciOi..." } } }
+    KeyExchangeSuccess:
+      description: Key exchanged successfully. Returns the encryption key.
+      content:
+        application/json:
+          schema: { type: object, properties: { key: { type: string, description: "AES-256 encryption key (hex)", example: "a1b2..." } } }
+    DataAccepted:
+      description: Data accepted successfully for processing.
+      content:
+        application/json:
+          schema: { type: object, properties: { message: { type: string, example: Data accepted for processing. }, messageId: { type: string, example: "1711994676123-0" } } }
+    HistorySpectrogramSuccess:
+       description: Historical spectrogram data retrieved successfully.
+       content:
+         application/json:
+           schema:
+             type: array
+             items: { $ref: '#/components/schemas/DetectorSpectrogramHistory' }
+    HistoryPeaksSuccess:
+       description: Historical peak data retrieved successfully.
+       content:
+         application/json:
+           schema:
+             type: array
+             items: { $ref: '#/components/schemas/DetectorPeakHistory' }
+    UserDeleteSuccess:
+      description: User deleted successfully.
+      content:
+        application/json:
+          schema: { type: object, properties: { message: { type: string, example: User deleted successfully } } }
+    MetricsSuccess:
+       description: Prometheus metrics exposed in text format.
+       content:
+         text/plain: { schema: { type: string, example: "# HELP http_requests_total ...\n..." } }
+    BadRequest:
+      description: Invalid input (validation failed).
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Unauthorized:
+      description: Authentication failed (invalid credentials, missing/invalid/expired token).
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Forbidden:
+      description: Authorization failed (e.g., invalid API key, insufficient permissions).
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    NotFound:
+      description: Resource not found.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Conflict:
+       description: Resource already exists (e.g., username).
+       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    TooManyRequests:
+      description: Rate limit exceeded.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    InternalServerError:
+      description: Internal server error.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    InternalServerErrorText:
+       description: Internal server error generating metrics.
+       content: { text/plain: { schema: { type: string } } }
+    ServiceUnavailable:
+        description: Service is temporarily unavailable (e.g., dependency issue, misconfiguration).
+        content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
       description: "JWT token obtained from the /login endpoint. Include in the Authorization header as 'Bearer {token}'."
+    apiKeyAuth:
+       type: apiKey
+       in: header
+       name: X-API-Key
+       description: "API Key required for the /data-ingest endpoint."
+
 
 tags:
   - name: Status
@@ -301,6 +385,6 @@ tags:
   - name: WebSocket
     description: Endpoints related to WebSocket communication setup
   - name: Data
-    description: Endpoints for retrieving spectrogram data
+    description: Endpoints for retrieving or ingesting spectrogram data
   - name: Users
     description: User management endpoints

@@ -74,6 +74,11 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-password}
       - DB_NAME=${DB_NAME:-earthsync}
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3001}
+      - API_INGEST_KEY=${API_INGEST_KEY:-changeme-in-production}
+      - PEAK_SMOOTHING_WINDOW=${PEAK_SMOOTHING_WINDOW:-5}
+      - PEAK_PROMINENCE_FACTOR=${PEAK_PROMINENCE_FACTOR:-1.5}
+      - PEAK_MIN_DISTANCE_HZ=${PEAK_MIN_DISTANCE_HZ:-1.0}
+      - PEAK_ABSOLUTE_THRESHOLD=${PEAK_ABSOLUTE_THRESHOLD:-1.0}
     depends_on:
       redis: { condition: service_healthy }
       postgres: { condition: service_healthy }
@@ -180,7 +185,7 @@ services:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-password}
       - REDIS_EXPORTER_CHECK_SINGLE_KEYS=spectrogram_history:detector1,spectrogram_history:detector2,spectrogram_history:detector3
-      - REDIS_EXPORTER_CHECK_KEY_PATTERNS=userkey:*
+      - REDIS_EXPORTER_CHECK_KEY_PATTERNS=userkey:*,peaks:*,spectrogram_history:*
       - LOG_LEVEL=${REDIS_EXPORTER_LOG_LEVEL:-warn}
     ports:
       - "9121:9121"
@@ -201,7 +206,7 @@ services:
     image: grafana/grafana:10.2.0
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer # Explicitly set to Viewer
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_LOG_LEVEL=${GF_LOG_LEVEL:-warn}
       - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
     ports:
