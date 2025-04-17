@@ -1,11 +1,9 @@
+// client/src/App.js
 /**
- * Main application component for EarthSync client (v1.1.8).
+ * Main application component for EarthSync client (v1.1.14 - Phase 4e Impl).
  * Handles authentication, theme toggling, and renders the SpectrogramPage.
- * Improvements:
- *   - Displays Historical Peak Data chart.
- *   - Globe point color subtly reflects recent peak amplitude.
- *   - More granular error messages.
- *   - Includes previous fixes and UX enhancements.
+ * Displays historical transient details in chart tooltips.
+ * Includes previous features and fixes.
  */
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
@@ -18,13 +16,17 @@ import {
   AppBar, Toolbar, Typography, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
   IconButton, CssBaseline, Box, Slider, FormControl, FormLabel, FormControlLabel, Switch, useTheme,
   ThemeProvider, createTheme, Select, MenuItem, Divider, CircularProgress, Alert, Snackbar,
-  LinearProgress, Paper
+  LinearProgress, Paper, Tooltip
 } from '@mui/material';
 import {
   Menu as MenuIcon, Brightness4 as Brightness4Icon, Brightness7 as Brightness7Icon,
   BarChart as BarChartIcon, Logout as LogoutIcon, History as HistoryIcon,
   Public as GlobeIcon, Info as InfoIcon, Error as ErrorIcon, CheckCircle as CheckCircleIcon,
-  Insights as InsightsIcon, ShowChart as ShowChartIcon
+  Insights as InsightsIcon, ShowChart as ShowChartIcon,
+  WarningAmber as WarningAmberIcon,
+  Bolt as BoltIcon,
+  Grain as GrainIcon,
+  NotificationsActive as NotificationsActiveIcon
 } from '@mui/icons-material';
 
 // Load environment variables as defaults
@@ -63,79 +65,111 @@ async function determineServerUrls(defaultApiUrl, defaultWsUrl) {
   }
 }
 
-// --- Historical Peak Chart Component ---
-const HistoricalPeakChart = React.memo(({ historicalPeakData, selectedDetector, darkMode }) => {
+
+// --- Historical Peak Chart Component (Updated for Transient Details Tooltip) ---
+const HistoricalPeakChart = React.memo(({ historicalPeakData, transientEvents, selectedDetector, darkMode }) => { // Changed prop name
     const theme = useTheme();
     const chartData = useMemo(() => {
-        if (!historicalPeakData || !selectedDetector || selectedDetector === 'all') {
-            return null;
-        }
+        if (!historicalPeakData || !selectedDetector || selectedDetector === 'all') { return null; }
         const detectorData = historicalPeakData.find(d => d.detectorId === selectedDetector);
-        if (!detectorData || !detectorData.peaks || detectorData.peaks.length === 0) {
-            return null;
-        }
+        if (!detectorData || !detectorData.peaks || detectorData.peaks.length === 0) { return null; }
 
-        const freqData = [];
-        const ampData = [];
-        const qFactorData = [];
+        const freqData = []; const ampData = []; const qFactorData = [];
 
-        // Create traces for each fundamental mode (approximate grouping by frequency)
+        // Group peaks by mode temporarily
         const modeRanges = {
-          'Mode 1 (7.8Hz)': { min: 6, max: 10, data: { f: [], a: [], q: [], t: [] } },
-          'Mode 2 (14Hz)': { min: 12, max: 17, data: { f: [], a: [], q: [], t: [] } },
-          'Mode 3 (21Hz)': { min: 18, max: 24, data: { f: [], a: [], q: [], t: [] } },
-          'Mode 4 (27Hz)': { min: 25, max: 30, data: { f: [], a: [], q: [], t: [] } },
-          'Mode 5 (34Hz)': { min: 31, max: 37, data: { f: [], a: [], q: [], t: [] } },
-          'Other': { min: -Infinity, max: Infinity, data: { f: [], a: [], q: [], t: [] } }, // Catch-all
+          'Mode 1 (7.8Hz)': { min: 6, max: 10, data: [] },
+          'Mode 2 (14Hz)': { min: 12, max: 17, data: [] },
+          'Mode 3 (21Hz)': { min: 18, max: 24, data: [] },
+          'Mode 4 (27Hz)': { min: 25, max: 30, data: [] },
+          'Mode 5 (34Hz)': { min: 31, max: 37, data: [] },
+          'Other': { min: -Infinity, max: Infinity, data: [] },
         };
 
+        // 1. Group all peaks by mode, preserving timestamp and status
         detectorData.peaks.forEach(entry => {
           const ts = new Date(entry.ts);
-          // Ensure entry.peaks is treated as an array, even if server stored a single object
           const peaksArray = Array.isArray(entry.peaks) ? entry.peaks : [entry.peaks];
 
           peaksArray.forEach(peak => {
-              if (!peak || typeof peak.freq !== 'number') return; // Skip invalid peak data
+              if (!peak || typeof peak.freq !== 'number') return;
               let assigned = false;
               for (const modeName in modeRanges) {
                   if (modeName !== 'Other' && peak.freq >= modeRanges[modeName].min && peak.freq < modeRanges[modeName].max) {
-                      modeRanges[modeName].data.f.push(peak.freq);
-                      modeRanges[modeName].data.a.push(peak.amp);
-                      modeRanges[modeName].data.q.push(peak.qFactor);
-                      modeRanges[modeName].data.t.push(ts);
+                      // Store the full peak object along with its timestamp
+                      modeRanges[modeName].data.push({ ...peak, ts: ts });
                       assigned = true;
                       break;
                   }
               }
-              if (!assigned) {
-                  modeRanges['Other'].data.f.push(peak.freq);
-                  modeRanges['Other'].data.a.push(peak.amp);
-                  modeRanges['Other'].data.q.push(peak.qFactor);
-                  modeRanges['Other'].data.t.push(ts);
-              }
+              if (!assigned) { modeRanges['Other'].data.push({ ...peak, ts: ts }); }
           });
         });
 
         const createTrace = (x, y, name, yaxis) => ({
-          x, y, mode: 'lines+markers', type: 'scatter', name, marker: { size: 4 }, yaxis
+          x, y, mode: 'lines+markers', type: 'scatter', name,
+          marker: { size: 4 },
+          // Style line breaks caused by null values
+          connectgaps: false, // Ensure null values create gaps
+          line: { width: 1.5 } // Slightly thicker line maybe
         });
 
+        // 2. Process each mode to create plotting arrays with nulls for line breaks
         Object.keys(modeRanges).forEach(modeName => {
             const modeData = modeRanges[modeName].data;
-            if (modeData.t.length > 0) {
-                freqData.push(createTrace(modeData.t, modeData.f, `${modeName}`, 'y1')); // Simplified name
-                ampData.push(createTrace(modeData.t, modeData.a, `${modeName}`, 'y2'));
-                qFactorData.push(createTrace(modeData.t, modeData.q, `${modeName}`, 'y3'));
+            if (modeData.length === 0) return;
+
+            // Sort data by timestamp first
+            modeData.sort((a, b) => a.ts - b.ts);
+
+            const plot_t = []; const plot_f = []; const plot_a = []; const plot_q = [];
+
+            modeData.forEach((peak, index) => {
+                const currentStatus = peak.trackStatus || 'unknown';
+
+                // Insert null to break line if this peak is 'new' AND it's not the very first point
+                if (currentStatus === 'new' && index > 0) {
+                    plot_t.push(null);
+                    plot_f.push(null);
+                    plot_a.push(null);
+                    plot_q.push(null);
+                }
+
+                // Add the actual peak data
+                plot_t.push(peak.ts);
+                plot_f.push(peak.freq);
+                plot_a.push(peak.amp);
+                plot_q.push(peak.qFactor); // Keep pushing qFactor even if null/undefined
+            });
+
+            // Add traces for this mode if data exists
+            if (plot_t.length > 0) {
+                freqData.push(createTrace(plot_t, plot_f, `${modeName}`, 'y1'));
+                ampData.push(createTrace(plot_t, plot_a, `${modeName}`, 'y2'));
+                qFactorData.push(createTrace(plot_t, plot_q, `${modeName}`, 'y3'));
             }
         });
 
-        // Check if any data was actually processed
-        if (freqData.length === 0 && ampData.length === 0 && qFactorData.length === 0) {
-            return null;
-        }
-
+        if (freqData.length === 0 && ampData.length === 0 && qFactorData.length === 0) { return null; }
         return { freqData, ampData, qFactorData };
     }, [historicalPeakData, selectedDetector]);
+
+    // Phase 4e: Update transientAnnotations to use event details in hovertext
+    const transientAnnotations = useMemo(() => {
+      if (!transientEvents || transientEvents.length === 0) return [];
+      return transientEvents.map(event => ({
+          type: 'line',
+          x0: event.ts, x1: event.ts, // Use timestamp from event object
+          y0: 0, y1: 1,
+          yref: 'paper',
+          line: { color: theme.palette.warning.light, width: 1, dash: 'dot' },
+          name: `Transient (${event.type})`, // Add type to name if desired
+          showlegend: false,
+          // Use details if available, otherwise construct a default message
+          hovertext: `${event.type?.toUpperCase() || 'TRANSIENT'} @ ${new Date(event.ts).toLocaleString()}${event.details ? `: ${event.details}` : ''}`,
+          hoverinfo: 'text'
+      }));
+    }, [transientEvents, theme.palette.warning.light]); // Depend on transientEvents
 
     const commonLayout = useMemo(() => ({
         autosize: true,
@@ -148,8 +182,10 @@ const HistoricalPeakChart = React.memo(({ historicalPeakData, selectedDetector, 
             gridcolor: darkMode ? '#555555' : '#d3d3d3',
             linecolor: darkMode ? '#aaaaaa' : '#000000',
             tickfont: { color: darkMode ? '#ffffff' : '#000000' },
-        }
-    }), [darkMode]);
+        },
+        shapes: transientAnnotations, // Use updated annotations
+        hovermode: 'closest'
+    }), [darkMode, transientAnnotations]); // Depend on updated annotations
 
     const freqLayout = useMemo(() => ({
         ...commonLayout,
@@ -187,26 +223,34 @@ const HistoricalPeakChart = React.memo(({ historicalPeakData, selectedDetector, 
             zerolinecolor: darkMode ? '#aaaaaa' : '#000000',
             tickfont: { color: darkMode ? '#ffffff' : '#000000' },
             titlefont: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
+            // range: [0, 50] // Example range cap
         }
     }), [commonLayout, darkMode]);
 
     if (!chartData) {
         return <Typography sx={{ p: 2, textAlign: 'center', color: 'text.secondary' }}>No historical peak data available for {selectedDetector}.</Typography>;
     }
-
     const plotConfig = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] };
 
     return (
-        <Paper elevation={2} sx={{ mt: 2, p: 1, bgcolor: theme.palette.mode === 'dark' ? 'grey.900' : 'grey.100' }}>
-             <Typography variant="h6" sx={{ textAlign: 'center', mb: 1 }}>Historical Peaks: {selectedDetector}</Typography>
-            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 1 }}>
-                <Box sx={{ flex: 1, minHeight: 250 }}>
+        <Paper elevation={2} sx={{ mt: 2, p: 1, bgcolor: theme.palette.mode === 'dark' ? 'grey.900' : 'grey.100', display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+             <Typography variant="h6" sx={{ textAlign: 'center', mb: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                 Historical Peaks: {selectedDetector}
+                 {/* Use transientEvents prop for count */}
+                 {transientEvents && transientEvents.length > 0 && (
+                     <Tooltip title={`${transientEvents.length} transient event(s) detected in this period (dotted lines)`}>
+                         <WarningAmberIcon sx={{ ml: 1, color: 'warning.main', fontSize: '1.1rem' }}/>
+                     </Tooltip>
+                 )}
+             </Typography>
+            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 1, flexGrow: 1, minHeight: 0 }}>
+                <Box sx={{ flex: 1, minHeight: { xs: 200, md: 250 }, height: '100%' }}>
                      <Plotly data={chartData.freqData} layout={freqLayout} config={plotConfig} style={{ width: '100%', height: '100%' }} useResizeHandler />
                 </Box>
-                 <Box sx={{ flex: 1, minHeight: 250 }}>
+                 <Box sx={{ flex: 1, minHeight: { xs: 200, md: 250 }, height: '100%' }}>
                      <Plotly data={chartData.ampData} layout={ampLayout} config={plotConfig} style={{ width: '100%', height: '100%' }} useResizeHandler />
                 </Box>
-                 <Box sx={{ flex: 1, minHeight: 250 }}>
+                 <Box sx={{ flex: 1, minHeight: { xs: 200, md: 250 }, height: '100%' }}>
                      <Plotly data={chartData.qFactorData} layout={qFactorLayout} config={plotConfig} style={{ width: '100%', height: '100%' }} useResizeHandler />
                 </Box>
             </Box>
@@ -296,7 +340,7 @@ function App() {
   const handleLogout = () => { localStorage.removeItem('token'); setToken(null); };
 
   if (isLoading && !serverUrls) {
-     return ( /* Loading spinner ... */
+     return (
        <ThemeProvider theme={theme}>
          <CssBaseline />
          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', flexDirection: 'column', gap: 2 }}>
@@ -309,7 +353,7 @@ function App() {
   }
 
    if (serverUrls && initializationError && !isAuthenticated) {
-     return ( /* Connection error message ... */
+     return (
        <ThemeProvider theme={theme}>
          <CssBaseline />
          <Box sx={{ padding: 3, textAlign: 'center' }}>
@@ -332,7 +376,6 @@ function App() {
           apiUrl={serverUrls.apiUrl} wsUrl={serverUrls.wsUrl}
         />
       ) : (
-        /* Login/Register Form ... */
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', p: 3 }}>
           <Box sx={{ padding: 3, maxWidth: 400, width: '100%', border: `1px solid ${theme.palette.divider}`, borderRadius: 1, bgcolor: 'background.paper' }}>
             <Typography variant="h5" component="h1" gutterBottom align="center">EarthSync {isRegistering ? 'Register' : 'Login'}</Typography>
@@ -366,11 +409,57 @@ function App() {
 // --- Spectrogram Page Component ---
 const WebSocketStatus = { CONNECTING: 'connecting', CONNECTED: 'connected', DISCONNECTED: 'disconnected', ERROR: 'error' };
 
+// Updated Transient Indicator Component for Phase 4b
+const pulseKeyframes = `
+  @keyframes pulse {
+    0% { opacity: 0.6; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.15); }
+    100% { opacity: 0.6; transform: scale(1); }
+  }
+`;
+const TransientIndicator = ({ transientInfo }) => {
+    let IconComponent = NotificationsActiveIcon; // Default pulsing icon
+    let iconColor = 'warning.main';
+    let title = "Transient event detected!";
+
+    if (transientInfo?.type === 'broadband') {
+        IconComponent = BoltIcon;
+        title = `Broadband transient detected!`;
+        iconColor = 'error.light'; // Use a different color maybe
+    } else if (transientInfo?.type === 'narrowband') {
+        IconComponent = GrainIcon;
+        title = `Narrowband transient detected!`;
+        iconColor = 'warning.light';
+    }
+
+    // Append details if available
+    if (transientInfo?.details) {
+        title += ` Details: ${transientInfo.details}`;
+    }
+
+    return (
+        <>
+            <style>{pulseKeyframes}</style>
+            <Tooltip title={title}>
+                <IconComponent sx={{
+                    color: iconColor,
+                    fontSize: '1.3rem',
+                    ml: 1,
+                    animation: 'pulse 1.5s infinite ease-in-out'
+                }}/>
+            </Tooltip>
+        </>
+    );
+};
+
+
 const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, apiUrl, wsUrl }) => {
   const [spectrogramData, setSpectrogramData] = useState({});
   const [detectorActivity, setDetectorActivity] = useState({});
-  const [peakData, setPeakData] = useState({}); // Stores latest peaks (real-time or historical last)
-  const [historicalPeakData, setHistoricalPeakData] = useState(null); // Stores full peak history for charts
+  const [peakData, setPeakData] = useState({});
+  const [historicalPeakData, setHistoricalPeakData] = useState(null);
+  // Phase 4e: Store full transient event objects {ts, type, details}
+  const [historicalTransientEvents, setHistoricalTransientEvents] = useState([]);
   const [encryptionKey, setEncryptionKey] = useState(null);
   const [appError, setAppError] = useState(null);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
@@ -385,8 +474,10 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [wsStatus, setWsStatus] = useState(WebSocketStatus.DISCONNECTED);
+  const [lastTransientInfo, setLastTransientInfo] = useState(null); // Phase 4b: Store transient details
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const recentTransientTimeoutRef = useRef(null);
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
 
   const globeRef = useRef();
@@ -401,6 +492,8 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
    useEffect(() => { localStorage.setItem('colorScale', JSON.stringify(colorScale)); }, [colorScale]);
    useEffect(() => { localStorage.setItem('normalize', JSON.stringify(normalize)); }, [normalize]);
    useEffect(() => { localStorage.setItem('selectedDetector', JSON.stringify(selectedDetector)); }, [selectedDetector]);
+   useEffect(() => { return () => { if (recentTransientTimeoutRef.current) clearTimeout(recentTransientTimeoutRef.current); }; }, []);
+
 
   const drawerWidth = 300;
   const [appBarHeight, setAppBarHeight] = useState(64);
@@ -418,9 +511,13 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
   const stableSetDetectorActivity = useCallback(setDetectorActivity, []);
   const stableSetPeakData = useCallback(setPeakData, []);
   const stableSetHistoricalPeakData = useCallback(setHistoricalPeakData, []);
+  // Phase 4e: Rename state setter for clarity
+  const stableSetHistoricalTransientEvents = useCallback(setHistoricalTransientEvents, []);
 
-  // --- Throttled Spectrogram & Peak Data Update ---
+
+  // --- Throttled Spectrogram & Peak Data Update (Phase 4b) ---
   const updateSpectrogram = useMemo(() => throttle((newData) => {
+        let transientInBatch = null; // Store transient info object if detected
         setSpectrogramData(prev => {
             const updated = { ...prev };
             newData.forEach(message => {
@@ -428,32 +525,47 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
                 const detectorId = message.detectorId;
                 const incomingSpectrogramRows = message.spectrogram;
                 if (!Array.isArray(incomingSpectrogramRows) || incomingSpectrogramRows.length === 0) return;
-                // Ensure incoming rows have the expected length before adding
-                const expectedPoints = 1101; // Match expected downsampled points
-                const validIncomingRows = incomingSpectrogramRows.filter(row => Array.isArray(row) && row.length === expectedPoints);
+                const expectedPointsApprox = 1101;
+                const validIncomingRows = incomingSpectrogramRows.filter(row => Array.isArray(row) && row.length > expectedPointsApprox - 10 && row.length < expectedPointsApprox + 10);
                 if(validIncomingRows.length === 0) return;
                 const currentRows = updated[detectorId] || [];
                 const newRows = [...currentRows, ...validIncomingRows].slice(-stableSetTimeSteps(ts => ts));
                 updated[detectorId] = newRows;
+
+                // Check for transient info object
+                if (message.transientInfo && message.transientInfo.type !== 'none') {
+                    transientInBatch = message.transientInfo; // Store the info object
+                    console.log("Transient Detected (WS):", message.transientInfo); // Log details
+                }
             });
             return updated;
-        });
-
+         });
         stableSetPeakData(prevPeaks => {
             const updatedPeaks = { ...prevPeaks };
             newData.forEach(message => {
                 if (message.detectorId && Array.isArray(message.detectedPeaks)) {
-                    updatedPeaks[message.detectorId] = message.detectedPeaks; // Store latest peaks
+                    updatedPeaks[message.detectorId] = message.detectedPeaks;
                 }
             });
             return updatedPeaks;
-        });
-
+         });
         newData.forEach(data => {
              if (!data.detectorId || !data.location) return;
              stableSetDetectorActivity(prev => ({ ...prev, [data.detectorId]: { lat: data.location.lat, lon: data.location.lon, lastUpdate: Date.now(), id: data.detectorId } }));
          });
+
+         // Handle real-time transient indicator pulse and store details
+         if (transientInBatch && !historicalModeRef.current) {
+             setLastTransientInfo(transientInBatch); // Store details for tooltip
+             if (recentTransientTimeoutRef.current) clearTimeout(recentTransientTimeoutRef.current);
+             recentTransientTimeoutRef.current = setTimeout(() => {
+                 setLastTransientInfo(null); // Clear details after pulse duration
+                 recentTransientTimeoutRef.current = null;
+             }, 5000); // Keep indicator pulsing/visible for 5 seconds
+         }
+
     }, 500, { leading: true, trailing: true }), [stableSetTimeSteps, stableSetDetectorActivity, stableSetPeakData]);
+
 
    const showSnackbar = useCallback((message, severity = 'error') => {
         setAppError(message);
@@ -481,79 +593,97 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     fetchKey();
   }, [token, apiUrl, showSnackbar]);
 
-  // Fetch Historical Data (Spectrogram + Peaks)
+  // Fetch Historical Data (Phase 4e - Extract full transient events)
   const fetchHistoricalData = useCallback(async () => {
     if (!token) return;
     setIsLoadingData(true); setIsTransitioning(true); setAppError(null);
-    setSpectrogramData({}); setDetectorActivity({}); setPeakData({}); stableSetHistoricalPeakData(null);
-    let fetchError = null;
-    let noDataMessage = null;
+    setSpectrogramData({}); setDetectorActivity({}); setPeakData({});
+    stableSetHistoricalPeakData(null); stableSetHistoricalTransientEvents([]); // Reset events state
+    let fetchError = null; let noDataMessage = null;
 
     try {
       console.log(`Fetching historical data: ${historicalHours} hours, detector: ${selectedDetector}`);
       const headers = { Authorization: `Bearer ${token}` };
       const params = selectedDetector !== 'all' ? { detectorId: selectedDetector } : {};
 
-      // --- Fetch Spectrogram & Peak History Concurrently ---
+      // Fetch BOTH spectrogram history (which now includes transient events) and peak history
       const [specResponse, peakResponse] = await Promise.all([
+        // Phase 4e: Use the spectrogram history endpoint to get transient events
         axios.get(`${apiUrl}/history/${historicalHours}`, { headers, params }).catch(err => { throw { type: 'spectrogram', error: err }; }),
         axios.get(`${apiUrl}/history/peaks/${historicalHours}`, { headers, params }).catch(err => { throw { type: 'peaks', error: err }; })
       ]);
 
-      // --- Process Spectrograms ---
-      console.log('Historical spectrogram data received:', specResponse.data?.length);
-      const historicalSpectrograms = Array.isArray(specResponse.data) ? specResponse.data : [];
+      // Process Spectrograms (and Extract Transient Events)
+      console.log('Historical spectrogram+transient data received:', specResponse.data?.length);
+      const historicalSpecAndTransients = Array.isArray(specResponse.data) ? specResponse.data : [];
       const newSpectrogramData = {}; const newDetectorActivity = {};
-      const expectedPoints = 1101; // Approx expected downsampled points
-      historicalSpectrograms.forEach(data => {
-        if (data.detectorId && Array.isArray(data.spectrogram) && data.location) {
-          const rowsFromHistory = [];
-          for (let i = 0; i < data.spectrogram.length; i += expectedPoints) {
-            const row = data.spectrogram.slice(i, i + expectedPoints);
-            // Only add if roughly the correct length (allow for minor discrepancies)
-             if (row.length >= expectedPoints - 5 && row.length <= expectedPoints + 5) {
-                 // Pad if slightly short
-                 if (row.length < expectedPoints) {
-                     row.push(...Array(expectedPoints - row.length).fill(0));
-                 }
-                 // Truncate if slightly long
-                 if (row.length > expectedPoints) {
-                     row.length = expectedPoints;
-                 }
-                 rowsFromHistory.push(row);
-             } else if (rowsFromHistory.length === 0 && i + expectedPoints >= data.spectrogram.length) {
-                 // Handle case where only one short row exists at the end (less ideal)
-                 row.push(...Array(expectedPoints - row.length).fill(0));
-                 rowsFromHistory.push(row);
-             }
-          }
-          if (rowsFromHistory.length > 0) {
-             newSpectrogramData[data.detectorId] = (newSpectrogramData[data.detectorId] || []).concat(rowsFromHistory).slice(-stableSetTimeSteps(ts => ts));
-             newDetectorActivity[data.detectorId] = { lat: data.location.lat, lon: data.location.lon, lastUpdate: Date.now(), id: data.detectorId };
-          }
-        }
-      });
-      setSpectrogramData(newSpectrogramData);
-      setDetectorActivity(newDetectorActivity);
-      if (Object.keys(newSpectrogramData).length === 0) noDataMessage = `No historical spectrogram data found`;
+      const collectedTransientEvents = []; // Temporary array for all detectors
+      const expectedPointsApprox = 1101;
 
+      historicalSpecAndTransients.forEach(dataEntry => {
+          // Expect structure: { detectorId, location, spectrogram: [...], transientEvents: [{ts, type, details}, ...] }
+          if (dataEntry.detectorId && dataEntry.location) {
+              // Process Spectrogram part
+              if(Array.isArray(dataEntry.spectrogram)) {
+                    const rowsFromHistory = [];
+                    for (let i = 0; i < dataEntry.spectrogram.length; i += expectedPointsApprox) {
+                        const row = dataEntry.spectrogram.slice(i, i + expectedPointsApprox);
+                        if (row.length >= expectedPointsApprox - 10 && row.length <= expectedPointsApprox + 10) {
+                            if (row.length < expectedPointsApprox) row.push(...Array(expectedPointsApprox - row.length).fill(0));
+                            if (row.length > expectedPointsApprox) row.length = expectedPointsApprox;
+                            rowsFromHistory.push(row);
+                        } else if (rowsFromHistory.length === 0 && i + expectedPointsApprox >= dataEntry.spectrogram.length) {
+                            row.push(...Array(expectedPointsApprox - row.length).fill(0));
+                            rowsFromHistory.push(row);
+                        }
+                    }
+                    if (rowsFromHistory.length > 0) {
+                       newSpectrogramData[dataEntry.detectorId] = (newSpectrogramData[dataEntry.detectorId] || []).concat(rowsFromHistory).slice(-stableSetTimeSteps(ts => ts));
+                    }
+              }
+              // Update Detector Activity
+              newDetectorActivity[dataEntry.detectorId] = { lat: dataEntry.location.lat, lon: dataEntry.location.lon, lastUpdate: Date.now(), id: dataEntry.detectorId };
 
-      // --- Process Peaks ---
+              // Phase 4e: Collect transient events if they exist in the response
+              if (Array.isArray(dataEntry.transientEvents)) {
+                  // Add detectorId to each event for filtering later
+                  collectedTransientEvents.push(...dataEntry.transientEvents.map(ev => ({...ev, detectorId: dataEntry.detectorId})));
+              }
+          }
+       });
+       setSpectrogramData(newSpectrogramData);
+       setDetectorActivity(newDetectorActivity);
+       if (Object.keys(newSpectrogramData).length === 0) noDataMessage = `No historical spectrogram data found`;
+
+      // Process Peaks (No change needed here, peak data is separate)
       console.log('Historical peak data received:', peakResponse.data?.length);
-      const historicalPeaks = Array.isArray(peakResponse.data) ? peakResponse.data : [];
-      stableSetHistoricalPeakData(historicalPeaks); // Store full history for charts
-
+      const historicalPeaksRaw = Array.isArray(peakResponse.data) ? peakResponse.data : [];
+      stableSetHistoricalPeakData(historicalPeaksRaw);
       const latestPeakData = {};
-      historicalPeaks.forEach(detHistory => { // Update sidebar peaks display
+      historicalPeaksRaw.forEach(detHistory => {
           if (detHistory.detectorId && Array.isArray(detHistory.peaks) && detHistory.peaks.length > 0) {
-              // Get the peaks from the very last timestamp entry for this detector
-              const lastEntryPeaks = detHistory.peaks[detHistory.peaks.length - 1].peaks;
-              latestPeakData[detHistory.detectorId] = Array.isArray(lastEntryPeaks) ? lastEntryPeaks : [];
+              const lastEntry = detHistory.peaks[detHistory.peaks.length - 1];
+              const lastEntryPeaks = Array.isArray(lastEntry.peaks) ? lastEntry.peaks : [];
+              latestPeakData[detHistory.detectorId] = lastEntryPeaks;
           }
       });
-      setPeakData(latestPeakData); // Update latest peaks for globe/sidebar
+      setPeakData(latestPeakData);
 
-      if (historicalPeaks.length === 0) noDataMessage = noDataMessage ? `${noDataMessage} or peak data found` : `No historical peak data found`;
+      // Phase 4e: Store the collected transient events (filter by selected detector if needed)
+      const relevantTransientEvents = selectedDetector === 'all'
+          ? collectedTransientEvents
+          : collectedTransientEvents.filter(event => event.detectorId === selectedDetector);
+      stableSetHistoricalTransientEvents(relevantTransientEvents.sort((a,b) => a.ts - b.ts)); // Store sorted events
+      if (relevantTransientEvents.length > 0) {
+           console.log(`Stored ${relevantTransientEvents.length} historical transient events for detector ${selectedDetector}.`);
+      }
+
+
+      if (historicalPeaksRaw.length === 0 && Object.keys(newSpectrogramData).length === 0) {
+           noDataMessage = `No historical spectrogram or peak data found`;
+      } else if (historicalPeaksRaw.length === 0) {
+           noDataMessage = noDataMessage ? `${noDataMessage} or peak data found` : `No historical peak data found`;
+      }
       if (noDataMessage) noDataMessage += ` for ${selectedDetector === 'all' ? 'any detector' : `detector ${selectedDetector}`} in the last ${historicalHours}h.`;
 
     } catch (errWrapper) {
@@ -566,7 +696,9 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
       if (fetchError) showSnackbar(fetchError, 'error');
       else if (noDataMessage) showSnackbar(noDataMessage, 'info');
     }
-  }, [token, apiUrl, historicalHours, selectedDetector, stableSetTimeSteps, stableSetHistoricalPeakData, showSnackbar]);
+    // Update dependencies for the new state setter name
+  }, [token, apiUrl, historicalHours, selectedDetector, stableSetTimeSteps, stableSetHistoricalPeakData, stableSetHistoricalTransientEvents, showSnackbar]);
+
 
    // WebSocket Connection Management Effect
    useEffect(() => {
@@ -584,12 +716,13 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
             clearReconnectTimeout();
             if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(1000, 'Switching to historical mode'); wsRef.current = null; }
             setWsStatus(WebSocketStatus.DISCONNECTED); setReconnectAttempt(0);
-            // fetchHistoricalData() // Called by handleModeChange now
+            setLastTransientInfo(null); // Clear transient indicator
+            if (recentTransientTimeoutRef.current) clearTimeout(recentTransientTimeoutRef.current);
         } else if (token && encryptionKey) {
             if (!wsRef.current && wsStatus !== WebSocketStatus.CONNECTING) {
                 console.log(`Attempting WS Connection (Attempt: ${reconnectAttempt})...`);
                 setWsStatus(WebSocketStatus.CONNECTING); setIsTransitioning(true); setAppError(null);
-                 if (reconnectAttempt === 0) { setSpectrogramData({}); setDetectorActivity({}); setPeakData({}); stableSetHistoricalPeakData(null); }
+                 if (reconnectAttempt === 0) { setSpectrogramData({}); setDetectorActivity({}); setPeakData({}); stableSetHistoricalPeakData(null); stableSetHistoricalTransientEvents([]); } // Use correct state setter
 
                 currentWs = new WebSocket(`${wsUrl}/?token=${token}`); wsRef.current = currentWs;
 
@@ -603,7 +736,9 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
                         const keyWordArray = CryptoJS.enc.Hex.parse(encryptionKey);
                         const decrypted = CryptoJS.AES.decrypt({ ciphertext: CryptoJS.enc.Base64.parse(encrypted) }, keyWordArray, { iv: CryptoJS.enc.Base64.parse(iv), mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
                         const messageJson = decrypted.toString(CryptoJS.enc.Utf8); if (!messageJson) throw new Error("Decryption resulted in empty message");
-                        updateSpectrogram([JSON.parse(messageJson)]);
+                        const messageData = JSON.parse(messageJson);
+                        // Pass the full message object, which includes transientInfo and trackStatus in peaks
+                        updateSpectrogram([messageData]);
                      } catch (err) { console.error('WebSocket message processing error:', err); showSnackbar(`WebSocket Data Error: ${err.message}. Check console.`, 'error'); }
                 };
                 currentWs.onerror = (error) => { console.error('WebSocket error event:', error); if (wsRef.current === currentWs) { setWsStatus(WebSocketStatus.ERROR); setIsTransitioning(false); showSnackbar('WebSocket connection error.', 'error'); }};
@@ -611,10 +746,10 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
                     console.log(`WebSocket closed: Code=${event.code}, Reason=${event.reason || 'N/A'}`);
                      if (wsRef.current !== currentWs) return;
                      wsRef.current = null; setWsStatus(WebSocketStatus.DISCONNECTED); setIsTransitioning(false);
-                    if (event.code !== 1000 && !historicalModeRef.current) { // Don't auto-reconnect if closed intentionally or in historical mode
+                    if (event.code !== 1000 && !historicalModeRef.current) {
                        showSnackbar(`WebSocket disconnected (${event.code}). Attempting to reconnect...`, 'warning');
                        scheduleReconnect(reconnectAttempt);
-                    } else { setReconnectAttempt(0); if (event.code === 1000) setAppError(null); } // Clear error on clean close
+                    } else { setReconnectAttempt(0); if (event.code === 1000) setAppError(null); }
                 };
             }
         } else {
@@ -627,18 +762,30 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
             console.log("Cleaning up WebSocket effect..."); clearReconnectTimeout();
             if (currentWs) { currentWs.onclose = null; currentWs.onerror = null; currentWs.close(1000, 'Component unmounting'); }
             if (wsRef.current === currentWs) { wsRef.current = null; }
+            if (recentTransientTimeoutRef.current) clearTimeout(recentTransientTimeoutRef.current);
         };
-   }, [historicalMode, token, encryptionKey, wsUrl, updateSpectrogram, reconnectAttempt, stableSetHistoricalPeakData, showSnackbar]); // Removed apiUrl, fetchHistoricalData dependency as they are handled elsewhere
+   // Update dependencies for the new state setter name
+   }, [historicalMode, token, encryptionKey, wsUrl, updateSpectrogram, reconnectAttempt, stableSetHistoricalPeakData, stableSetHistoricalTransientEvents, showSnackbar]);
+
 
   // --- Memoized Plot Data & Layout ---
    const { xLabels, yLabels, displayData, minAmplitude, maxAmplitude } = useMemo(() => {
-     const numPoints = 1101; const calculatedXLabels = Array.from({ length: numPoints }, (_, i) => (i * 5 * (55 / 5500)).toFixed(2));
+     const numPointsApprox = 1101;
+     const calculatedXLabels = Array.from({ length: numPointsApprox }, (_, i) => (i * 5 * (55 / 5500)).toFixed(2));
      const sourceRows = selectedDetector === 'all' ? Object.values(spectrogramData).flat() : spectrogramData[selectedDetector] || [];
-     const validRows = sourceRows.filter(row => Array.isArray(row) && row.length === numPoints); const recentRows = validRows.slice(-timeSteps);
-     const finalRows = recentRows.length < timeSteps ? [...Array(timeSteps - recentRows.length).fill().map(() => Array(numPoints).fill(0)), ...recentRows] : recentRows;
-     const calculatedYLabels = finalRows.map((_, i) => { const secondsAgo = (finalRows.length - 1 - i) * 5; return secondsAgo === 0 ? 'Now' : `-${secondsAgo}s`; });
+     const validRows = sourceRows.filter(row => Array.isArray(row) && row.length > numPointsApprox - 10 && row.length < numPointsApprox + 10);
+     const recentRows = validRows.slice(-timeSteps);
+     const finalRows = recentRows.map(row => {
+         if (row.length === numPointsApprox) return row;
+         const newRow = [...row];
+         if (row.length < numPointsApprox) { newRow.push(...Array(numPointsApprox - row.length).fill(0)); }
+         else { newRow.length = numPointsApprox; }
+         return newRow;
+     });
+     const paddedRows = finalRows.length < timeSteps ? [...Array(timeSteps - finalRows.length).fill(Array(numPointsApprox).fill(0)), ...finalRows] : finalRows;
+     const calculatedYLabels = paddedRows.map((_, i) => { const secondsAgo = (paddedRows.length - 1 - i) * 5; return secondsAgo === 0 ? 'Now' : `-${secondsAgo}s`; });
      const normalizeFn = (data) => { const vals=data.flat().filter(v=>typeof v==='number'&&!isNaN(v)); if(vals.length===0) return data; const min=Math.min(...vals); const max=Math.max(...vals); const range=max-min; if(range===0) return data.map(r=>r.map(()=>0)); return data.map(r=>r.map(v=>typeof v==='number'&&!isNaN(v)?((v-min)/range)*15:0)); };
-     const finalDisplayData = normalize ? normalizeFn(finalRows) : finalRows;
+     const finalDisplayData = normalize ? normalizeFn(paddedRows) : paddedRows;
      const allFlatValues = finalDisplayData.flat().filter(v => typeof v === 'number' && !isNaN(v));
      const calculatedMinAmplitude = allFlatValues.length ? Math.max(0, Math.min(...allFlatValues)) : 0;
      const amplitudeCap = normalize ? 16 : 25; const calculatedMaxAmplitude = allFlatValues.length ? Math.min(amplitudeCap, Math.max(...allFlatValues) + 1) : amplitudeCap;
@@ -652,15 +799,13 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
    const globePoints = useMemo(() => Object.values(detectorActivity).map(({ lat, lon, lastUpdate, id }) => {
        const timeSinceUpdate = Date.now() - lastUpdate; const isActive = !historicalMode && (timeSinceUpdate < 10000);
        const sizePulse = isActive ? (timeSinceUpdate < 2000 ? 0.6 : 0.5) : 0.2;
-       const latestPeaks = peakData[id] || []; // Use latest peaks from state
+       const latestPeaks = peakData[id] || [];
        const avgAmplitude = latestPeaks.length > 0 ? latestPeaks.reduce((sum, p) => sum + p.amp, 0) / latestPeaks.length : 0;
-       // Subtle color variation based on avg amplitude (more red for higher amplitude)
        const baseColor = isActive ? 'red' : (historicalMode ? 'grey' : 'blue');
        let pointColor = baseColor;
        if (isActive && avgAmplitude > 10) pointColor = avgAmplitude > 15 ? 'darkred' : 'indianred';
        else if (!isActive && !historicalMode && avgAmplitude > 5) pointColor = 'cornflowerblue';
-
-       const peakInfo = latestPeaks.length > 0 ? `\nPeaks: ${latestPeaks.map(p => `${p.freq.toFixed(1)}Hz (A:${p.amp.toFixed(1)}, Q:${p.qFactor ? p.qFactor.toFixed(1) : 'N/A'})`).join(', ')}` : '';
+       const peakInfo = latestPeaks.length > 0 ? `\nPeaks: ${latestPeaks.map(p => `${p.freq.toFixed(1)}Hz (A:${p.amp.toFixed(1)}, Q:${p.qFactor ? p.qFactor.toFixed(1) : 'N/A'}, S:${p.trackStatus ? p.trackStatus.charAt(0) : '?'})`).join(', ')}` : '';
        return { lat, lng: lon, size: sizePulse, color: pointColor, label: `Detector: ${id}\nCoords: ${lat.toFixed(2)}, ${lon.toFixed(2)}\nStatus: ${isActive ? 'Active' : (historicalMode ? 'Historical' : 'Idle')}${peakInfo}`, id };
    }), [detectorActivity, historicalMode, peakData]);
 
@@ -674,43 +819,45 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
    const handlePlotHover = useCallback((data) => { /* Placeholder */ }, []);
    const handlePlotClick = useCallback((data) => { if(data.points.length > 0) { showSnackbar(`Plot Point Clicked: Freq=${data.points[0].x}, Time=${data.points[0].y}, Amp=${data.points[0].z.toFixed(2)}`, 'info'); } }, [showSnackbar]);
    const handlePlotRelayout = useCallback((eventData) => { /* Placeholder */ }, []);
-   const handleGlobePointClick = useCallback((point) => { if (point?.id && detectorOptions.some(opt => opt.id === point.id)) { setSelectedDetector(point.id); showSnackbar(`Selected detector ${point.id} from globe.`, 'info'); } }, [detectorOptions, showSnackbar]);
+   const handleGlobePointClick = useCallback((point) => {
+       if (point?.id && detectorOptions.some(opt => opt.id === point.id)) {
+           setSelectedDetector(point.id);
+           showSnackbar(`Selected detector ${point.id} from globe.`, 'info');
+       } else {
+            console.log("Clicked on globe background or invalid point:", point);
+       }
+   }, [detectorOptions, showSnackbar, setSelectedDetector]);
    const handleGlobePointHover = useCallback((point) => { /* Placeholder */ }, []);
    const handleCloseSnackbar = useCallback((event, reason) => { if (reason === 'clickaway') return; setSnackbarOpen(false); }, []);
-
    const handleModeChange = (newMode) => {
        if (newMode === historicalMode) return;
        setHistoricalMode(newMode);
-       // Fetch data when switching modes
-       if (newMode) {
-           fetchHistoricalData(); // Fetch historical on switch TO historical
-            setSpectrogramData({}); setDetectorActivity({}); setPeakData({}); // Clear display immediately
-       } else {
-           setSpectrogramData({}); setDetectorActivity({}); setPeakData({}); stableSetHistoricalPeakData(null); // Clear data for real-time
-           // WebSocket effect will trigger reconnection and data population
-       }
-   };
+       setLastTransientInfo(null); // Clear transient indicator info
+       if (recentTransientTimeoutRef.current) clearTimeout(recentTransientTimeoutRef.current);
 
+       if (newMode) {
+           fetchHistoricalData();
+           setSpectrogramData({}); setDetectorActivity({}); setPeakData({});
+       } else {
+           setSpectrogramData({}); setDetectorActivity({}); setPeakData({});
+           stableSetHistoricalPeakData(null); stableSetHistoricalTransientEvents([]); // Clear events state too
+       }
+    };
    const handleDetectorChange = (event) => {
        const newDetector = event.target.value;
        if (newDetector === selectedDetector) return;
        setSelectedDetector(newDetector);
        if (historicalMode) {
-           fetchHistoricalData(); // Re-fetch historical data for the new detector selection
-       } else {
-          // Optionally clear the plot immediately for the *old* detector
-          // setSpectrogramData(prev => ({ ...prev, [selectedDetector]: [] }));
-          // setPeakData(prev => ({ ...prev, [selectedDetector]: [] }));
+           fetchHistoricalData();
        }
    };
 
   const showTopLoader = isLoadingData || isTransitioning;
-
   const currentPeakInfo = useMemo(() => {
     if (selectedDetector === 'all') return null;
-    const peaks = peakData[selectedDetector]; // Uses latest peaks from state
+    const peaks = peakData[selectedDetector];
     if (!peaks || peaks.length === 0) return "No peaks detected.";
-    return peaks.map(p => `Freq: ${p.freq.toFixed(2)} Hz, Amp: ${p.amp.toFixed(1)}, Q: ${p.qFactor ? p.qFactor.toFixed(1) : 'N/A'}`).join(' | ');
+    return peaks.map(p => `Freq: ${p.freq.toFixed(2)} Hz, Amp: ${p.amp.toFixed(1)}, Q: ${p.qFactor ? p.qFactor.toFixed(1) : 'N/A'}, S: ${p.trackStatus ? p.trackStatus.charAt(0) : '?'}`).join(' | ');
   }, [peakData, selectedDetector]);
 
   return (
@@ -720,6 +867,8 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
         <Toolbar>
           <IconButton color="inherit" edge="start" onClick={() => setDrawerOpen(!drawerOpen)} sx={{ mr: 2 }} aria-label={drawerOpen ? "Close settings drawer" : "Open settings drawer"}><MenuIcon /></IconButton>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>EarthSync</Typography>
+           {/* Phase 4b: Real-time Transient Indicator (shows details on hover) */}
+           {!historicalMode && lastTransientInfo && <TransientIndicator transientInfo={lastTransientInfo} />}
            <Box sx={{ display: 'flex', alignItems: 'center', mr: 2, border: `1px solid ${theme.palette.divider}`, borderRadius: 1, px: 1, py: 0.5 }} aria-live="polite">
              {historicalMode ? <HistoryIcon sx={{ color: 'info.main', fontSize: '1.1rem' }} aria-label="Historical Mode Active"/>
               : wsStatus === WebSocketStatus.CONNECTED ? <CheckCircleIcon sx={{ color: 'success.main', fontSize: '1.1rem' }} aria-label="WebSocket Connected"/>
@@ -766,7 +915,16 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
               {historicalMode && ( <FormControl fullWidth sx={{ mb: 2 }}> <FormLabel id="historical-hours-label" sx={{ mb: 0.5 }}>Historical Hours</FormLabel> <Slider aria-labelledby="historical-hours-label" value={historicalHours} onChange={(_, val) => debouncedSetHistoricalHours(val)} min={1} max={72} step={1} marks valueLabelDisplay="auto" size="small"/> </FormControl> )}
                {selectedDetector !== 'all' && ( /* Peak Info Box */
                    <Box sx={{ mt: 2, p: 1, border: `1px dashed ${theme.palette.divider}`, borderRadius: 1 }}>
-                       <Typography variant="caption" sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}> <InsightsIcon sx={{ fontSize: '1rem', mr: 0.5 }}/> {historicalMode ? 'Latest Hist.' : 'Detected'} Peaks ({selectedDetector}): </Typography>
+                       <Typography variant="caption" sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                           <InsightsIcon sx={{ fontSize: '1rem', mr: 0.5 }}/>
+                           {historicalMode ? 'Latest Hist.' : 'Detected'} Peaks ({selectedDetector}):
+                           {/* Phase 4e: Use historicalTransientEvents for count */}
+                           {historicalMode && historicalTransientEvents.length > 0 && (
+                                <Tooltip title={`${historicalTransientEvents.length} transient event(s) detected in this period`}>
+                                   <WarningAmberIcon sx={{ ml: 1, color: 'warning.main', fontSize: '1.1rem' }}/>
+                                </Tooltip>
+                           )}
+                       </Typography>
                        <Typography variant="caption" sx={{ display: 'block', wordBreak: 'break-word' }}> {currentPeakInfo || (isTransitioning ? 'Loading...' : 'N/A')} </Typography>
                    </Box>
                )}
@@ -775,34 +933,72 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
           </Box>
           {/* Globe */}
           <Box sx={{ p: 1, display: 'flex', justifyContent: 'center', borderTop: `1px solid ${theme.palette.divider}` }}>
-             {drawerOpen && ( <Globe ref={globeRef} globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg" bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png" backgroundColor='rgba(0,0,0,0)' pointsData={globePoints} pointLat="lat" pointLng="lng" pointColor="color" pointRadius={0.25} pointAltitude="size" pointLabel="label" onPointClick={handleGlobePointClick} onPointHover={handleGlobePointHover} width={drawerWidth - 16} height={drawerWidth - 16} atmosphereColor={darkMode ? 'lightblue' : 'dodgerblue'} atmosphereAltitude={0.25} animateIn={true} pointResolution={4} /> )}
+             {drawerOpen && (
+                 <Globe
+                     ref={globeRef}
+                     globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
+                     bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
+                     backgroundColor='rgba(0,0,0,0)'
+                     pointsData={globePoints}
+                     pointLat="lat"
+                     pointLng="lng"
+                     pointColor="color"
+                     pointRadius={0.25}
+                     pointAltitude="size"
+                     pointLabel="label"
+                     onPointClick={handleGlobePointClick}
+                     onPointHover={handleGlobePointHover}
+                     width={drawerWidth - 16}
+                     height={drawerWidth - 16}
+                     atmosphereColor={darkMode ? 'lightblue' : 'dodgerblue'}
+                     atmosphereAltitude={0.25}
+                     animateIn={true}
+                     pointResolution={4}
+                 />
+             )}
            </Box>
         </Drawer>
 
         {/* --- Main Content Area (Spectrogram + Historical Charts) --- */}
         <Box component="main" ref={plotContainerRef}
-          sx={{ flexGrow: 1, width: `calc(100% - ${drawerOpen ? drawerWidth : 0}px)`, height: `calc(100vh - ${appBarHeight}px)`, overflowY: 'auto', // Allow vertical scroll
-              padding: `${margin}px`, boxSizing: 'border-box', transition: theme.transitions.create(['margin', 'width'], { easing: theme.transitions.easing.sharp, duration: drawerOpen ? theme.transitions.duration.enteringScreen : theme.transitions.duration.leavingScreen }), marginLeft: drawerOpen ? 0 : `-${drawerWidth}px`, position: 'relative' }}
+          sx={{
+              flexGrow: 1,
+              width: `calc(100% - ${drawerOpen ? drawerWidth : 0}px)`,
+              height: `calc(100vh - ${appBarHeight}px)`,
+              padding: `${margin}px`,
+              boxSizing: 'border-box',
+              transition: theme.transitions.create(['margin', 'width'], { easing: theme.transitions.easing.sharp, duration: drawerOpen ? theme.transitions.duration.enteringScreen : theme.transitions.duration.leavingScreen }),
+              marginLeft: drawerOpen ? 0 : `-${drawerWidth}px`,
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column'
+          }}
         >
            {/* Spectrogram Plot */}
-           <Box sx={{ height: historicalMode && selectedDetector !== 'all' && historicalPeakData && historicalPeakData.length > 0 && historicalPeakData.some(d => d.detectorId === selectedDetector && d.peaks?.length > 0) ? '60%' : '100%', // Adjust height only if there are peaks to show
-                      minHeight: 300, // Ensure minimum height
-                      position: 'relative' }}>
+           <Box sx={{
+                height: historicalMode && selectedDetector !== 'all' && historicalPeakData && historicalPeakData.some(d => d.detectorId === selectedDetector && d.peaks?.length > 0) ? '60%' : '100%',
+                minHeight: 300,
+                position: 'relative',
+                flexShrink: 0
+           }}>
                {(isLoadingData || isTransitioning) && !Object.keys(spectrogramData).length ? (
                  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', flexDirection: 'column', gap: 1 }}> <CircularProgress /> <Typography sx={{ mt: 2 }}>Loading Spectrogram Data...</Typography> </Box>
                ) : (displayData && displayData.length > 0 && displayData[0]?.length > 0) ? (
-                 <Box className="plot-container fade-in" sx={{ opacity: isTransitioning ? 0.5 : 1, transition: 'opacity 0.3s ease-in-out' }}>
+                 <Box className="plot-container fade-in" sx={{ opacity: isTransitioning ? 0.5 : 1, transition: 'opacity 0.3s ease-in-out', height: '100%' }}>
                      <Plotly data={plotData} layout={layout} revision={Date.now()} style={{ width: '100%', height: '100%' }} useResizeHandler config={{ responsive: true, displayModeBar: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'], willReadFrequently: true }} onHover={handlePlotHover} onClick={handlePlotClick} onRelayout={handlePlotRelayout}/>
                  </Box>
                ) : ( <Typography sx={{ textAlign: 'center', mt: 4 }}>No spectrogram data available for selected detector(s).</Typography> )
               }
            </Box>
 
-           {/* Historical Peak Charts */}
-           {historicalMode && selectedDetector !== 'all' && historicalPeakData && (
-                <Box sx={{ height: 'auto', mt: 2 }}> {/* Container for charts */}
+           {/* Historical Peak Charts Wrapper Box */}
+           {historicalMode && selectedDetector !== 'all' && historicalPeakData && historicalPeakData.some(d => d.detectorId === selectedDetector && d.peaks?.length > 0) && (
+                // Removed display:flex from this wrapper Box
+                <Box sx={{ height: 'auto', mt: 2, flexGrow: 1, minHeight: 0 }}>
+                   {/* Phase 4e: Pass historicalTransientEvents */}
                    <HistoricalPeakChart
                        historicalPeakData={historicalPeakData}
+                       transientEvents={historicalTransientEvents} // Pass full events
                        selectedDetector={selectedDetector}
                        darkMode={darkMode}
                    />

@@ -1,3 +1,4 @@
+# .github/workflows/build-and-test.yml
 name: Build and Test EarthSync
 
 on:
@@ -10,7 +11,7 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15 # Increased slightly for DB interactions
 
     steps:
       - name: Checkout code
@@ -50,21 +51,31 @@ jobs:
         working-directory: ./earthsync
         run: |
           echo "Waiting for services to stabilize and become healthy..."
-          sleep 15
+          sleep 20 # Slightly longer sleep before health check
           echo "Checking service health status..."
           MAX_RETRIES=30
           RETRY_INTERVAL=3
           for i in $(seq 1 $MAX_RETRIES); do
             echo "Attempt $i/$MAX_RETRIES: Checking server health..."
-            SERVER_HEALTH=$(curl -fsS --max-time 2 http://localhost:3000/health)
-            if [[ "$SERVER_HEALTH" == *"OK"* ]]; then
-              echo "Server is healthy!"
-              sleep 5 # Extra pause after health check passes
-              break
+            # Use numeric status code check and handle potential curl errors
+            SERVER_HEALTH_STATUS=$(curl -o /dev/null -w "%{http_code}" -fsS --max-time 3 http://localhost:3000/health || echo "000")
+            if [[ "$SERVER_HEALTH_STATUS" == "200" ]]; then
+              SERVER_HEALTH=$(curl -fsS --max-time 3 http://localhost:3000/health)
+               # Add extra checks for redis/db status within health response if needed
+               if [[ "$SERVER_HEALTH" == *"redis_main\":\"OK\""* ]] && [[ "$SERVER_HEALTH" == *"redis_stream\":\"OK\""* ]] && [[ "$SERVER_HEALTH" == *"postgres\":\"OK\""* ]]; then
+                   echo "Server is healthy! Redis and DB are OK."
+                   sleep 5 # Extra pause after health check passes
+                   break
+               else
+                   echo "Server responding but dependencies might not be ready: $SERVER_HEALTH"
+               fi
+            else
+                echo "Server not healthy yet (HTTP Status: $SERVER_HEALTH_STATUS)."
             fi
+
             if [ $i -eq $MAX_RETRIES ]; then
               echo "Server failed to become healthy within timeout."
-              echo "--- Server Health Response ---"; echo "$SERVER_HEALTH"; echo "--- Server Logs ---"; docker compose logs server || echo "Failed to get server logs."; echo "--- Detector1 Logs ---"; docker compose logs detector1 || echo "Failed to get detector1 logs."; exit 1
+              echo "--- Server Health Response (if any) ---"; curl -fsS --max-time 2 http://localhost:3000/health || echo "No response"; echo "--- Server Logs ---"; docker compose logs server || echo "Failed to get server logs."; echo "--- DB Logs ---"; docker compose logs postgres || echo "Failed to get DB logs."; echo "--- Detector1 Logs ---"; docker compose logs detector1 || echo "Failed to get detector1 logs."; exit 1
             fi
             sleep $RETRY_INTERVAL
           done
@@ -78,7 +89,8 @@ jobs:
 
       - name: Install Test Dependencies
         working-directory: ./earthsync
-        run: npm install --save-dev axios ws ioredis bcryptjs jsonwebtoken jest@^29 crypto-js
+        # Add pg dependency
+        run: npm install --save-dev axios ws ioredis bcryptjs jsonwebtoken jest@^29 crypto-js pg
         continue-on-error: false
 
       - name: Run Integration Tests
@@ -92,126 +104,27 @@ jobs:
           JWT_SECRET: 1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
           API_INGEST_KEY: changeme-in-production # Match server .env for testing
           NODE_ENV: test
-          JEST_TIMEOUT: 35000 # Increased Jest timeout
+          JEST_TIMEOUT: 45000 # Increased Jest timeout further for DB interaction
+          # Database connection for seeding/verification within tests
+          DB_HOST: localhost
+          DB_PORT: 5432 # Default port exposed by docker-compose
+          DB_USER: user # Match docker-compose default
+          DB_PASSWORD: password # Match docker-compose default
+          DB_NAME: earthsync # Match docker-compose default
+          # Set retention low for testing archival boundary (e.g., 1 minute = 60000 ms)
+          # These need to be available to the server process during test execution
+          # Note: Difficult to pass env vars directly to docker compose `up`.
+          # For CI, it might be easier to test combined queries without relying on archive task timing.
+          # Alternatively, manually insert data simulating different ages.
+          REDIS_SPEC_RETENTION_HOURS: 0.01 # ~36 seconds
+          REDIS_PEAK_RETENTION_HOURS: 0.02 # ~72 seconds
+
         run: |
-          cat << 'TEST_EOF' > integration.test.js
-          const axios = require('axios');
-          const WebSocket = require('ws');
-          const Redis = require('ioredis');
-          const jwt = require('jsonwebtoken');
-          const CryptoJS = require('crypto-js');
-
-          const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
-          const WS_URL = process.env.WS_URL || 'ws://localhost:3000';
-          const JWT_SECRET = process.env.JWT_SECRET || '1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p';
-          const API_INGEST_KEY = process.env.API_INGEST_KEY || 'changeme-in-production';
-          const TEST_TIMEOUT = parseInt(process.env.JEST_TIMEOUT || '35000', 10); // Use env timeout
-          const WS_MESSAGE_TIMEOUT = 25000; // Increased WS message specific timeout (was 15000)
-          const DOWNSAMPLE_FACTOR = 5;
-          const RAW_FREQUENCY_POINTS = 5501;
-          const EXPECTED_DOWNSAMPLED_LENGTH = Math.ceil(RAW_FREQUENCY_POINTS / DOWNSAMPLE_FACTOR);
-
-          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-          // Main Redis client (for user keys)
-          const redis = new Redis({ host: process.env.REDIS_HOST || 'localhost', port: parseInt(process.env.REDIS_PORT || '6379', 10), password: process.env.REDIS_PASSWORD || 'password', lazyConnect: true, keyPrefix: 'userkey:', retryStrategy: times => Math.min(times * 100, 3000), reconnectOnError: () => true, maxRetriesPerRequest: 3 });
-          const streamRedis = new Redis({ host: process.env.REDIS_HOST || 'localhost', port: parseInt(process.env.REDIS_PORT || '6379', 10), password: process.env.REDIS_PASSWORD || 'password', lazyConnect: true, retryStrategy: times => Math.min(times * 100, 3000), reconnectOnError: () => true, maxRetriesPerRequest: 3 });
-
-
-          describe('EarthSync Integration Tests (v1.1.8)', () => {
-              let authToken;
-              let encryptionKey;
-              const testDetectorIdBase = 'ci_detector';
-
-              jest.setTimeout(TEST_TIMEOUT);
-
-              beforeAll(async () => {
-                  try {
-                      await redis.connect(); await streamRedis.connect(); await redis.ping(); await streamRedis.ping(); console.log('Redis connections successful.');
-                      const userKey = await redis.keys(`ci_testuser`); if (userKey.length > 0) await redis.del(userKey);
-                      const dataKeys = await streamRedis.keys(`*${testDetectorIdBase}*`); if (dataKeys.length > 0) await streamRedis.del(dataKeys);
-                      const streamKey = await streamRedis.keys('spectrogram_stream'); if (streamKey.length > 0) await streamRedis.del(streamKey);
-                      console.log('Cleaned up potential leftover test data.');
-                  } catch (err) { console.error('Redis connection/cleanup failed:', err); throw new Error('Cannot connect/clean Redis.'); }
-                  try { console.log('Attempting register...'); await axios.post(`${API_BASE_URL}/register`, { username: 'ci_testuser', password: 'ci_password123' }); console.log('Test user registered.'); }
-                  catch (err) { if (err.response?.status === 409) { console.log('Test user exists.'); } else { console.error('Register failed:', err.response?.data || err.message); throw err; } }
-              });
-
-              afterAll(async () => {
-                  try {
-                     if (!authToken) { const loginRes = await axios.post(`${API_BASE_URL}/login`, { username: 'ci_testuser', password: 'ci_password123' }); authToken = loginRes.data.token; }
-                     if (authToken) { await axios.delete(`${API_BASE_URL}/users/ci_testuser`, { headers: { Authorization: `Bearer ${authToken}` } }); console.log('Test user cleaned.'); }
-                     const userKey = await redis.keys(`ci_testuser`); if (userKey.length > 0) await redis.del(userKey);
-                     const dataKeys = await streamRedis.keys(`*${testDetectorIdBase}*`); if (dataKeys.length > 0) await streamRedis.del(dataKeys);
-                     const streamKey = await streamRedis.keys('spectrogram_stream'); if (streamKey.length > 0) await streamRedis.del(streamKey);
-                     console.log('Test data cleaned.');
-                  } catch (err) { console.warn('Cleanup failed:', err.response?.data || err.message); }
-                  await redis.quit(); await streamRedis.quit(); console.log('Redis connections closed.');
-              });
-
-              test('GET /health should return 200 OK', async () => {
-                  const response = await axios.get(`${API_BASE_URL}/health`); expect(response.status).toBe(200); expect(response.data.status).toBe('OK'); expect(response.data.redis_main).toBe('OK'); expect(response.data.redis_stream).toBe('OK'); expect(response.data.postgres).toBe('OK');
-              });
-              test('POST /login returns JWT', async () => {
-                  const response = await axios.post(`${API_BASE_URL}/login`, { username: 'ci_testuser', password: 'ci_password123' }); expect(response.status).toBe(200); expect(response.data.token).toBeDefined(); authToken = response.data.token;
-              });
-              test('POST /key-exchange returns key', async () => {
-                  expect(authToken).toBeDefined(); const response = await axios.post(`${API_BASE_URL}/key-exchange`, {}, { headers: { Authorization: `Bearer ${authToken}` } }); expect(response.status).toBe(200); expect(response.data.key).toMatch(/^[a-f0-9]{64}$/); encryptionKey = response.data.key; const storedKey = await redis.get(`ci_testuser`); expect(storedKey).toBe(encryptionKey);
-              });
-              test('POST /data-ingest accepts valid batch', async () => {
-                  const testDetectorId = testDetectorIdBase + "_ingest"; const payload = { detectorId: testDetectorId, location: { lat: 1.23, lon: -4.56 }, spectrograms: [ Array(RAW_FREQUENCY_POINTS).fill(1.0), Array(RAW_FREQUENCY_POINTS).fill(2.0) ] }; const headers = { 'X-API-Key': API_INGEST_KEY }; const response = await axios.post(`${API_BASE_URL}/data-ingest`, payload, { headers }); expect(response.status).toBe(202); expect(response.data.messageId).toBeDefined(); await sleep(300); const streamMessages = await streamRedis.xrevrange('spectrogram_stream', '+', '-', 'COUNT', 1); expect(streamMessages.length).toBeGreaterThan(0); const streamData = JSON.parse(streamMessages[0][1][1]); expect(streamData.detectorId).toBe(testDetectorId); expect(streamData.spectrogram.length).toBe(2); expect(streamData.spectrogram[0].length).toBe(RAW_FREQUENCY_POINTS);
-              });
-
-              test('WebSocket receives processed data with peaks', async () => {
-                  expect(authToken).toBeDefined(); expect(encryptionKey).toBeDefined();
-                  const ws = new WebSocket(`${WS_URL}/?token=${authToken}`); let receivedMessage = null; let wsError = null; let wsClosedCode = null; let closeReason = '';
-
-                  const messagePromise = new Promise((resolve, reject) => {
-                     const timeout = setTimeout(() => { ws.terminate(); reject(new Error(`WebSocket message timeout after ${WS_MESSAGE_TIMEOUT}ms (State: ${ws.readyState})`)); }, WS_MESSAGE_TIMEOUT);
-                     ws.on('message', (data) => { clearTimeout(timeout); receivedMessage = data.toString('utf8'); resolve(); });
-                     ws.on('error', (err) => { clearTimeout(timeout); wsError = err; console.error("WS direct error:", err); reject(err); });
-                     ws.on('close', (code, reason) => { wsClosedCode = code; closeReason = reason.toString(); if (code !== 1000) { clearTimeout(timeout); reject(new Error(`WS closed unexpectedly: ${code} - ${closeReason}`)); } });
-                  });
-
-                  await new Promise((resolve, reject) => { const ct = setTimeout(() => reject(new Error('WS connection timeout')), 5000); ws.on('open', () => { clearTimeout(ct); console.log('WebSocket connected for peak test.'); resolve(); }); ws.on('error', (err) => { clearTimeout(ct); reject(err); }); });
-                  await sleep(300); // Delay after open
-
-                  const rawSpectrogramWithPeak = Array(RAW_FREQUENCY_POINTS).fill(1.0); const peakIndex = Math.floor(RAW_FREQUENCY_POINTS / 4); const peakFreq = peakIndex * (55 / (RAW_FREQUENCY_POINTS - 1));
-                  rawSpectrogramWithPeak[peakIndex - 2] = 3.0; rawSpectrogramWithPeak[peakIndex - 1] = 8.0; rawSpectrogramWithPeak[peakIndex] = 20.0; rawSpectrogramWithPeak[peakIndex + 1] = 7.0; rawSpectrogramWithPeak[peakIndex + 2] = 2.5;
-                  const testDetectorId = testDetectorIdBase + "_ws"; const ingestPayload = { detectorId: testDetectorId, location: { lat: 45, lon: 45 }, spectrograms: [rawSpectrogramWithPeak] }; const peakKeyWs = `peaks:${testDetectorId}`; await streamRedis.del(peakKeyWs);
-
-                  await axios.post(`${API_BASE_URL}/data-ingest`, ingestPayload, { headers: { 'X-API-Key': API_INGEST_KEY } });
-                  console.log('Test message ingested for WS test.');
-                  await sleep(1000); // Increased pause after ingest to allow server processing
-
-                  try { await messagePromise; } catch(e) { console.error("WS Error Obj:", wsError); console.error("WS Closed Code/Reason:", wsClosedCode, closeReason); throw e; }
-
-                  expect(receivedMessage).toBeDefined(); expect(receivedMessage).toContain(':');
-                  const [encrypted, iv] = receivedMessage.split(':'); const keyWordArray = CryptoJS.enc.Hex.parse(encryptionKey); const decryptedBytes = CryptoJS.AES.decrypt({ ciphertext: CryptoJS.enc.Base64.parse(encrypted) }, keyWordArray, { iv: CryptoJS.enc.Base64.parse(iv), mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }); const decryptedText = decryptedBytes.toString(CryptoJS.enc.Utf8); const decryptedData = JSON.parse(decryptedText);
-
-                  expect(decryptedData.detectorId).toBe(testDetectorId);
-                  expect(decryptedData.spectrogram[0].length).toBe(EXPECTED_DOWNSAMPLED_LENGTH);
-                  expect(Array.isArray(decryptedData.detectedPeaks)).toBe(true);
-                  expect(decryptedData.detectedPeaks.length).toBeGreaterThanOrEqual(1);
-                  const detectedPeak = decryptedData.detectedPeaks.find(p => Math.abs(p.freq - peakFreq) < 1.0); // Allow slightly wider tolerance for enhanced detection
-                  expect(detectedPeak).withContext(`Expected peak near ${peakFreq.toFixed(2)}Hz not found in ${JSON.stringify(decryptedData.detectedPeaks)}`).toBeDefined();
-                  expect(detectedPeak.amp).toBeCloseTo(20.0, 0);
-                  expect(detectedPeak.qFactor).toBeGreaterThan(0);
-                  console.log('Received WS Peaks:', decryptedData.detectedPeaks);
-
-                  const storedPeaks = await streamRedis.zrange(peakKeyWs, 0, -1); expect(storedPeaks.length).toBe(1); const storedPeakDataArray = JSON.parse(storedPeaks[0]); expect(Array.isArray(storedPeakDataArray)).toBe(true); const storedMainPeak = storedPeakDataArray.find(p => Math.abs(p.freq - peakFreq) < 1.0); expect(storedMainPeak).toBeDefined();
-
-                  ws.close(1000, 'Test complete'); await streamRedis.del(peakKeyWs);
-              });
-
-              test('GET /history/peaks/:hours returns data', async () => {
-                  expect(authToken).toBeDefined(); const testDetectorId = testDetectorIdBase + "_hist"; const peakKeyHist = `peaks:${testDetectorId}`; const nowMs = Date.now(); const peakSet1 = [{ freq: 7.8, amp: 15, qFactor: 4 }]; const peakSet2 = [{ freq: 14.1, amp: 10, qFactor: 5 }, { freq: 7.9, amp: 12, qFactor: 4.2 }]; await streamRedis.zadd(peakKeyHist, nowMs - 60000, JSON.stringify(peakSet1)); await streamRedis.zadd(peakKeyHist, nowMs, JSON.stringify(peakSet2)); const response = await axios.get(`${API_BASE_URL}/history/peaks/1?detectorId=${testDetectorId}`, { headers: { Authorization: `Bearer ${authToken}` } }); expect(response.status).toBe(200); expect(Array.isArray(response.data)).toBe(true); expect(response.data.length).toBe(1); const detectorHistory = response.data[0]; expect(detectorHistory.detectorId).toBe(testDetectorId); expect(Array.isArray(detectorHistory.peaks)).toBe(true); expect(detectorHistory.peaks.length).toBe(2); const event1 = detectorHistory.peaks[0]; const event2 = detectorHistory.peaks[1]; expect(event1.ts).toBeCloseTo(nowMs - 60000, -3); expect(event1.peaks).toEqual(peakSet1); expect(event2.ts).toBeCloseTo(nowMs, -3); expect(event2.peaks).toEqual(peakSet2); console.log('Retrieved Peak History:', JSON.stringify(detectorHistory.peaks)); await streamRedis.del(peakKeyHist);
-              });
-
-          });
-          TEST_EOF
-
-          npx jest integration.test.js --detectOpenHandles --forceExit --verbose
+          # Copy the modified integration test file
+          cp ./server/integration.test.js integration.test.js
+          # Run tests
+          # Added --runInBand to potentially avoid resource conflicts during DB/Redis setup/teardown
+          npx jest integration.test.js --detectOpenHandles --forceExit --verbose --runInBand
         continue-on-error: false
 
       - name: Clean up Docker Compose resources

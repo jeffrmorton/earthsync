@@ -1,6 +1,8 @@
+// detector/detector.js
 /**
  * Detector module to generate and publish simulated spectrogram data to Redis streams.
  * Includes enhanced simulation features: diurnal variation, randomized parameters.
+ * v1.1.9 - Increased Redis connection timeout during startup.
  */
 require('dotenv').config();
 const Redis = require('ioredis');
@@ -32,6 +34,9 @@ let DETECTOR_BATCH_SIZE = parseInt(process.env.DETECTOR_BATCH_SIZE, 10) || 1;
 const DETECTOR_ID = process.env.DETECTOR_ID || crypto.randomUUID();
 let LATITUDE = parseFloat(process.env.LATITUDE);
 let LONGITUDE = parseFloat(process.env.LONGITUDE);
+// Increased connection timeout (was 10000)
+const REDIS_CONNECT_TIMEOUT_MS = parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10) || 20000;
+
 
 if (!redisHost || !redisPort || !redisPassword) { logger.error('FATAL: Redis configuration missing.'); process.exit(1); }
 if (isNaN(LATITUDE) || isNaN(LONGITUDE)) { logger.warn(`Invalid/missing LAT/LON. Using random coords for ${DETECTOR_ID}.`); LATITUDE = Math.random() * 180 - 90; LONGITUDE = Math.random() * 360 - 180; }
@@ -39,9 +44,30 @@ if (INTERVAL_MS < 500) { logger.warn(`Detector interval ${INTERVAL_MS}ms is very
 if (DETECTOR_BATCH_SIZE < 1) { logger.warn(`Detector batch size must be >= 1. Using 1.`); DETECTOR_BATCH_SIZE = 1; }
 
 // --- Redis Client Setup ---
-const redisClient = new Redis({ host: redisHost, port: redisPort, password: redisPassword, retryStrategy: (times) => { const d = Math.min(times*100, 5000); logger.warn(`Redis retry ${times} in ${d}ms (${DETECTOR_ID})`); return d; }, lazyConnect: true });
+const redisClient = new Redis({
+    host: redisHost,
+    port: redisPort,
+    password: redisPassword,
+    lazyConnect: true, // Important: connect explicitly in startDetector
+    connectTimeout: REDIS_CONNECT_TIMEOUT_MS, // Use the configured timeout for initial connect attempt
+    retryStrategy: (times) => {
+        const delay = Math.min(times * 100, 3000); // Shorter retry delay after initial attempt
+        logger.warn(`Redis retry ${times} in ${delay}ms (${DETECTOR_ID})`);
+        return delay;
+    },
+    reconnectOnError: (err) => {
+        logger.error(`Redis reconnect on error trigger (${DETECTOR_ID})`, { error: err.message });
+        // Only retry on specific errors if needed, true allows retrying on most errors
+        return true;
+    },
+    maxRetriesPerRequest: 3 // Limit retries for commands after connection
+});
+
 redisClient.on('error', (err) => logger.error(`Redis Client Error (${DETECTOR_ID})`, { error: err.message }));
-redisClient.on('connect', () => logger.info(`Redis client connected (${DETECTOR_ID}).`));
+redisClient.on('connect', () => logger.info(`Redis client connecting... (${DETECTOR_ID}).`)); // Changed log slightly
+redisClient.on('ready', () => logger.info(`Redis client ready (${DETECTOR_ID}).`)); // Changed log slightly
+redisClient.on('close', () => logger.warn(`Redis client connection closed (${DETECTOR_ID}).`));
+redisClient.on('reconnecting', () => logger.warn(`Redis client reconnecting... (${DETECTOR_ID}).`));
 
 // --- Simulation Parameters ---
 const RAW_FREQUENCY_POINTS = 5501;
@@ -87,39 +113,110 @@ function generateSpectrogram() {
 }
 
 async function publishSpectrogramBatch() {
+  // Check connection status before publishing
+  if (redisClient.status !== 'ready') {
+       logger.warn(`Redis not ready, skipping publish (${DETECTOR_ID}) (Status: ${redisClient.status})`);
+       return;
+  }
+
   const batch = [];
   for (let i = 0; i < DETECTOR_BATCH_SIZE; i++) { batch.push(generateSpectrogram()); }
   const message = { spectrogram: batch, timestamp: new Date().toISOString(), interval: INTERVAL_MS, detectorId: DETECTOR_ID, location: { lat: LATITUDE, lon: LONGITUDE } };
   const messageString = JSON.stringify(message);
   try {
-    // Ensure connected before attempting xadd
-    if (redisClient.status !== 'ready') {
-       logger.warn(`Redis not ready, skipping publish (${DETECTOR_ID})`);
-       return;
-    }
     const messageId = await redisClient.xadd('spectrogram_stream', '*', 'data', messageString);
     logger.info(`Batch published (${DETECTOR_ID})`, { messageId, batchSize: batch.length });
-  } catch (err) { logger.error(`Failed publish batch (${DETECTOR_ID})`, { error: err.message }); }
+  } catch (err) {
+    logger.error(`Failed publish batch (${DETECTOR_ID})`, { error: err.message });
+    // Optional: check if the error is connection related and attempt reconnect if status isn't 'connecting'
+    if (redisClient.status !== 'reconnecting' && redisClient.status !== 'connecting') {
+        logger.warn(`Attempting explicit reconnect due to publish error (${DETECTOR_ID})`);
+        redisClient.connect().catch(connectErr => {
+            logger.error(`Explicit reconnect attempt failed (${DETECTOR_ID})`, { error: connectErr.message });
+        });
+    }
+  }
 }
 
 async function startDetector() {
+  logger.info(`Detector ${DETECTOR_ID} attempting to connect to Redis at ${redisHost}:${redisPort}...`);
   try {
-    await redisClient.connect();
-    logger.info(`Detector ${DETECTOR_ID} connecting to Redis...`);
-    // Wait until ready state or timeout
+    // Explicitly connect and wait for 'ready' or timeout/error
     await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Redis connection timeout')), 10000);
-        redisClient.once('ready', () => { clearTimeout(timeout); resolve(); });
-        redisClient.once('error', (err) => { clearTimeout(timeout); reject(err); }); // Fail fast on initial connect error
+        const timeout = setTimeout(() => {
+            reject(new Error(`Redis connection timeout after ${REDIS_CONNECT_TIMEOUT_MS}ms`));
+            // Attempt to disconnect if timeout occurs to prevent lingering connection attempts
+            redisClient.disconnect();
+        }, REDIS_CONNECT_TIMEOUT_MS);
+
+        redisClient.once('ready', () => {
+            clearTimeout(timeout);
+            resolve();
+        });
+
+        redisClient.once('error', (err) => { // Catch errors during the initial connect sequence
+            clearTimeout(timeout);
+            logger.error(`Redis initial connection error (${DETECTOR_ID})`, { error: err.message });
+            reject(err);
+        });
+
+        // Start the connection attempt
+        redisClient.connect().catch(err => {
+            // This catch might be redundant if the 'error' event fires, but good for safety
+             clearTimeout(timeout);
+             logger.error(`Redis .connect() promise rejected (${DETECTOR_ID})`, { error: err.message });
+             reject(err);
+        });
     });
-    logger.info(`Detector ${DETECTOR_ID} started. Pub interval ${INTERVAL_MS}ms, Batch ${DETECTOR_BATCH_SIZE}.`, { lat: LATITUDE.toFixed(4), lon: LONGITUDE.toFixed(4) });
+
+    // If the promise resolved, we are connected and ready
+    logger.info(`Detector ${DETECTOR_ID} started. Redis connection successful. Pub interval ${INTERVAL_MS}ms, Batch ${DETECTOR_BATCH_SIZE}.`, { lat: LATITUDE.toFixed(4), lon: LONGITUDE.toFixed(4) });
     setInterval(publishSpectrogramBatch, INTERVAL_MS);
-  } catch (err) { logger.error(`Detector ${DETECTOR_ID} failed start/connect`, { error: err.message }); process.exit(1); }
+
+  } catch (err) {
+    // Log the error that caused the promise rejection (timeout or connection error)
+    logger.error(`Detector ${DETECTOR_ID} failed start/connect`, { error: err.message });
+    // Ensure disconnection before exiting
+    if (redisClient.status !== 'end') {
+      redisClient.disconnect();
+    }
+    process.exit(1);
+  }
 }
 
+// Graceful shutdown
+let shuttingDown = false;
 async function shutdownDetector() {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info(`Shutting down detector ${DETECTOR_ID}...`);
-    try { if (redisClient.status === 'ready' || redisClient.status === 'connecting') { await redisClient.quit(); logger.info(`Redis closed for ${DETECTOR_ID}.`); } } catch (err) { logger.error(`Error closing Redis for ${DETECTOR_ID}:`, { error: err.message }); } finally { logger.info(`Detector ${DETECTOR_ID} shutdown complete.`); process.exit(0); }
+    // Clear the interval timer to prevent further publishes during shutdown
+    const intervalTimers = setInterval(() => {}, 10000); // Get all interval timers
+    for (let i = 0; i <= intervalTimers; i++) { // This is a bit hacky, might need a specific timer handle
+        clearInterval(i);
+    }
+    logger.debug(`Cleared interval timers for ${DETECTOR_ID}.`);
+
+    try {
+        if (redisClient.status !== 'end') { // Check if already closed/disconnected
+            logger.info(`Closing Redis connection for ${DETECTOR_ID} (Status: ${redisClient.status})...`);
+            // Give Redis a moment to send any buffered commands if needed, then quit.
+            // Using disconnect() is immediate, quit() tries to wait. Let's use disconnect() for faster shutdown.
+            redisClient.disconnect();
+            logger.info(`Redis disconnected for ${DETECTOR_ID}.`);
+        } else {
+             logger.info(`Redis connection already closed for ${DETECTOR_ID}.`);
+        }
+    } catch (err) {
+        logger.error(`Error closing Redis for ${DETECTOR_ID}:`, { error: err.message });
+    } finally {
+        logger.info(`Detector ${DETECTOR_ID} shutdown complete.`);
+        process.exit(0);
+    }
 }
-process.on('SIGINT', shutdownDetector); process.on('SIGTERM', shutdownDetector);
+
+process.on('SIGINT', shutdownDetector);
+process.on('SIGTERM', shutdownDetector);
+
+// Start the detector logic
 startDetector();

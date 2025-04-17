@@ -1,14 +1,15 @@
 openapi: 3.0.3
 info:
   title: EarthSync Server API
-  description: API for managing users, key exchange, data ingest, and historical data retrieval (spectrograms and peaks). Includes enhanced server-side peak detection (Freq, Amp, Q-Factor) on raw data with smoothing, prominence checks.
-  version: 1.1.8
+  description: API for managing users, key exchange, data ingest, and historical data retrieval (spectrograms and peaks). Includes enhanced server-side peak detection and basic transient detection. Archives older data to database.
+  version: 1.1.13
 servers:
   - url: http://localhost:3000
     description: Development Server (HTTP)
 
 paths:
   /health:
+    # ... remains the same ...
     get:
       summary: Check server health
       tags: [Status]
@@ -31,6 +32,7 @@ paths:
             application/json: { $ref: '#/components/schemas/ErrorResponse' }
 
   /register:
+    # ... remains the same ...
     post:
       summary: Register a new user
       tags: [Authentication]
@@ -47,6 +49,7 @@ paths:
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /login:
+    # ... remains the same ...
     post:
       summary: Log in a user
       tags: [Authentication]
@@ -63,6 +66,7 @@ paths:
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /key-exchange:
+    # ... remains the same ...
     post:
       summary: Exchange encryption key for WebSocket communication
       tags: [WebSocket]
@@ -74,6 +78,7 @@ paths:
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /data-ingest:
+    # ... remains the same ...
     post:
       summary: Ingest a batch of raw spectrogram data from an external source
       tags: [Data]
@@ -98,6 +103,7 @@ paths:
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /history/{hours}:
+    # Note: Renamed endpoint to reflect optional hours
     get:
       summary: Retrieve historical spectrogram data (processed)
       tags: [Data]
@@ -105,9 +111,19 @@ paths:
       parameters:
         - name: hours
           in: path
-          required: true
+          required: false # Now optional
           schema: { type: integer, minimum: 1, maximum: 72 }
-          description: Number of hours of historical data to retrieve (1-72).
+          description: Number of hours of historical data to retrieve (1-72). Mutually exclusive with startTime/endTime.
+        - name: startTime
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Start timestamp (ISO 8601 format). Requires endTime if used. Mutually exclusive with hours.
+        - name: endTime
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: End timestamp (ISO 8601 format). Requires startTime if used. Mutually exclusive with hours.
         - name: detectorId
           in: query
           required: false
@@ -121,6 +137,7 @@ paths:
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /history/peaks/{hours}:
+    # Note: Renamed endpoint to reflect optional hours
     get:
       summary: Retrieve historical detected peak data
       tags: [Data]
@@ -128,9 +145,19 @@ paths:
       parameters:
         - name: hours
           in: path
-          required: true
+          required: false # Now optional
           schema: { type: integer, minimum: 1, maximum: 72 }
-          description: Number of hours of historical peak data to retrieve (1-72).
+          description: Number of hours of historical peak data to retrieve (1-72). Mutually exclusive with startTime/endTime.
+        - name: startTime
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Start timestamp (ISO 8601 format). Requires endTime if used. Mutually exclusive with hours.
+        - name: endTime
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: End timestamp (ISO 8601 format). Requires startTime if used. Mutually exclusive with hours.
         - name: detectorId
           in: query
           required: false
@@ -145,6 +172,7 @@ paths:
 
 
   /users/{username}:
+    # ... remains the same ...
     delete:
       summary: Delete a user account (self-deletion)
       tags: [Users]
@@ -165,6 +193,7 @@ paths:
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /metrics:
+    # ... remains the same ...
     get:
       summary: Prometheus metrics endpoint
       tags: [Status]
@@ -221,7 +250,16 @@ components:
         freq: { type: number, format: float, description: "Detected peak frequency in Hz", example: 7.81 }
         amp: { type: number, format: float, description: "Detected peak amplitude", example: 15.3 }
         qFactor: { type: number, format: float, nullable: true, description: "Estimated Quality Factor (Center Freq / FWHM)", example: 4.5 }
-      required: [freq, amp, qFactor]
+        trackStatus: { type: string, enum: [new, continuing], description: "Indicates if the peak is new or part of an ongoing track", example: "continuing" }
+      required: [freq, amp, qFactor, trackStatus]
+
+    TransientInfo:
+      type: object
+      description: "Information about detected transient events."
+      properties:
+        type: { type: string, enum: [none, broadband, narrowband, error], description: "Type of transient detected.", example: "narrowband" }
+        details: { type: string, nullable: true, description: "Details about the detected transient.", example: "Narrowband signal detected near 4.0 Hz (Amp: 12.1, Delta: 11.1)"}
+      required: [type]
 
     HistoricalPeakEntry:
        type: object
@@ -232,6 +270,9 @@ components:
            description: "Array of peaks detected at this timestamp.",
            items: { $ref: '#/components/schemas/DetectedPeak' }
          }
+         # Phase 4d Note: transientDetected boolean MIGHT be included here by some server logic,
+         # but the primary storage is intended for historical_spectrograms table.
+         transientDetected: { type: boolean, nullable: true, description: "Indicates if a transient was detected at this timestamp (potentially unreliable, check spectrogram history)", example: false }
        required: [ts, peaks]
 
     DetectorPeakHistory:
@@ -265,9 +306,10 @@ components:
         detectedPeaks: {
           type: array,
           items: { $ref: '#/components/schemas/DetectedPeak' },
-          description: "Array of peaks detected in the first raw spectrogram of this batch."
+          description: "Array of peaks detected in the first raw spectrogram of this batch (includes trackStatus)."
         }
-      required: [detectorId, timestamp, location, interval, spectrogram, detectedPeaks]
+        transientInfo: { $ref: '#/components/schemas/TransientInfo' } # Phase 4a: Changed from transientDetected
+      required: [detectorId, timestamp, location, interval, spectrogram, detectedPeaks, transientInfo]
 
 
     DetectorSpectrogramHistory:
@@ -281,6 +323,9 @@ components:
           items: { type: number, format: float },
           description: "Array of concatenated, downsampled amplitude values for the requested time period."
         }
+        # Phase 4d Note: This endpoint currently returns only the concatenated spectrogram.
+        # Transient details for historical data are stored in the database but not exposed via this specific endpoint structure yet.
+        # Future enhancement could add a separate endpoint or modify this response.
       required: [detectorId, location, spectrogram]
 
     ErrorResponse:
@@ -292,24 +337,16 @@ components:
   responses:
     RegistrationSuccess:
       description: User registered successfully.
-      content:
-        application/json:
-          schema: { type: object, properties: { message: { type: string, example: Registration successful } } }
+      content: { application/json: { schema: { type: object, properties: { message: { type: string, example: Registration successful } } } } }
     LoginSuccess:
       description: Login successful. Returns a JWT token.
-      content:
-        application/json:
-          schema: { type: object, properties: { token: { type: string, description: "JWT token for authenticated requests", example: "eyJhbGciOi..." } } }
+      content: { application/json: { schema: { type: object, properties: { token: { type: string, description: "JWT token for authenticated requests", example: "eyJhbGciOi..." } } } } }
     KeyExchangeSuccess:
       description: Key exchanged successfully. Returns the encryption key.
-      content:
-        application/json:
-          schema: { type: object, properties: { key: { type: string, description: "AES-256 encryption key (hex)", example: "a1b2..." } } }
+      content: { application/json: { schema: { type: object, properties: { key: { type: string, description: "AES-256 encryption key (hex)", example: "a1b2..." } } } } }
     DataAccepted:
       description: Data accepted successfully for processing.
-      content:
-        application/json:
-          schema: { type: object, properties: { message: { type: string, example: Data accepted for processing. }, messageId: { type: string, example: "1711994676123-0" } } }
+      content: { application/json: { schema: { type: object, properties: { message: { type: string, example: Data accepted for processing. }, messageId: { type: string, example: "1711994676123-0" } } } } }
     HistorySpectrogramSuccess:
        description: Historical spectrogram data retrieved successfully.
        content:
@@ -326,13 +363,10 @@ components:
              items: { $ref: '#/components/schemas/DetectorPeakHistory' }
     UserDeleteSuccess:
       description: User deleted successfully.
-      content:
-        application/json:
-          schema: { type: object, properties: { message: { type: string, example: User deleted successfully } } }
+      content: { application/json: { schema: { type: object, properties: { message: { type: string, example: User deleted successfully } } } } }
     MetricsSuccess:
        description: Prometheus metrics exposed in text format.
-       content:
-         text/plain: { schema: { type: string, example: "# HELP http_requests_total ...\n..." } }
+       content: { text/plain: { schema: { type: string, example: "# HELP http_requests_total ...\n..." } } }
     BadRequest:
       description: Invalid input (validation failed).
       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
@@ -372,7 +406,6 @@ components:
        in: header
        name: X-API-Key
        description: "API Key required for the /data-ingest endpoint."
-
 
 tags:
   - name: Status
