@@ -1,10 +1,10 @@
 // server/server.js
 /**
- * Main server entry point for EarthSync (v1.1.14 - Phase 4e Impl).
+ * Main server entry point for EarthSync (v1.1.15 - Phase 4e Fix).
  * Handles API requests, WebSocket connections, and data processing.
  * Uses external processing utilities. Includes Enhanced Peak Detection,
  * Basic Peak Tracking & Enhanced Transient Detection.
- * Phase 4e: Return transient details in history API response.
+ * Refactors history routes, fixes integration tests. Returns transient details in history API.
  */
 require('dotenv').config();
 const express = require('express');
@@ -78,7 +78,7 @@ const REDIS_SPEC_RETENTION_MS = (parseInt(process.env.REDIS_SPEC_RETENTION_HOURS
 const REDIS_PEAK_RETENTION_MS = (parseInt(process.env.REDIS_PEAK_RETENTION_HOURS, 10) || 72) * 60 * 60 * 1000;
 
 // --- Log Startup Info ---
-logger.info(`Starting EarthSync server v1.1.14 (Phase 4e Impl) on port ${PORT}...`);
+logger.info(`Starting EarthSync server v1.1.15 (Phase 4e Fix) on port ${PORT}...`);
 logger.info(`Allowed CORS origins: ${ALLOWED_ORIGINS.join(', ')}`);
 logger.info(`Redis Spectrogram Retention: ${process.env.REDIS_SPEC_RETENTION_HOURS || 24} hours`);
 logger.info(`Redis Peak Retention: ${process.env.REDIS_PEAK_RETENTION_HOURS || 72} hours`);
@@ -166,18 +166,27 @@ app.post('/key-exchange', apiLimiter, authenticateToken, async (req, res, next) 
     await redisClient.setex(redisKey, ENCRYPTION_KEY_TTL_SECONDS, key); logger.info('Key generated/stored', { username, redisKey: REDIS_KEY_PREFIX + redisKey }); res.json({ key }); } catch (err) { logger.error('Key exchange error', { username, error: err.message }); next(err); }
 });
 
-// --- Phase 3a/3b/4d/4e: Updated History Validation Rules ---
-const historyValidationRules = [
-    param('hours').optional({ checkFalsy: true }).isInt({ min: 1, max: 72 }).withMessage('Hours must be 1-72 if provided.'),
-    queryValidator('startTime').optional().isISO8601().withMessage('startTime must be a valid ISO 8601 date.'),
-    queryValidator('endTime').optional().isISO8601().withMessage('endTime must be a valid ISO 8601 date.'),
+
+// --- Refactored History Routes ---
+
+// Validation for routes using :hours parameter
+const historyHoursValidationRules = [
+    param('hours').isInt({ min: 1, max: 72 }).withMessage('Hours must be 1-72.'),
+    queryValidator('detectorId').optional().isString().trim().isLength({ min: 1, max: 50 }).withMessage('Invalid detector ID.')
+];
+
+// Validation for routes using startTime/endTime query parameters
+const historyRangeValidationRules = [
+    queryValidator('startTime').isISO8601().withMessage('startTime must be a valid ISO 8601 date.'),
+    queryValidator('endTime').isISO8601().withMessage('endTime must be a valid ISO 8601 date.'),
     queryValidator('detectorId').optional().isString().trim().isLength({ min: 1, max: 50 }).withMessage('Invalid detector ID.'),
     queryValidator().custom((value, { req }) => {
-        const { hours } = req.params;
         const { startTime, endTime } = req.query;
-        if (!hours && (!startTime || !endTime)) { throw new Error('Either hours parameter or both startTime and endTime query parameters are required.'); }
-        if (hours && (startTime || endTime)) { throw new Error('Cannot provide both hours parameter and startTime/endTime query parameters.'); }
-        if (startTime && endTime) { if (new Date(endTime) < new Date(startTime)) { throw new Error('endTime must be after startTime.'); } }
+        if (startTime && endTime) {
+            if (new Date(endTime) < new Date(startTime)) { throw new Error('endTime must be after startTime.'); }
+        } else {
+             throw new Error('Both startTime and endTime query parameters are required for range query.');
+        }
         return true;
     })
 ];
@@ -202,149 +211,141 @@ function getQueryTimeRange(hours, startTimeStr, endTimeStr) {
     return { startTimeMs, endTimeMs, rangeIdentifier };
 }
 
-// Historical Data (Spectrogram) - Updated for Phase 4e (Return Transient Events)
-app.get('/history/:hours?', apiLimiter, authenticateToken, historyValidationRules, validateRequest, async (req, res, next) => {
-  const hours = req.params.hours ? parseInt(req.params.hours, 10) : null;
-  const { startTime, endTime, detectorId } = req.query;
-  const username = req.user.username;
+// --- Route for Spectrogram History by HOURS ---
+app.get('/history/hours/:hours', apiLimiter, authenticateToken, historyHoursValidationRules, validateRequest, async (req, res, next) => {
+    const hours = parseInt(req.params.hours, 10);
+    const { detectorId } = req.query;
+    const username = req.user.username;
+    const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(hours, null, null);
+    const cacheKey = `history_spec_transient:${rangeIdentifier}:${detectorId || 'all'}`;
 
-  const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(hours, startTime, endTime);
-  const startTimeISO = new Date(startTimeMs).toISOString();
-  const endTimeISO = new Date(endTimeMs).toISOString();
-  // Phase 4e: Update cache key to reflect inclusion of transient events
-  const cacheKey = `history_spec_transient:${rangeIdentifier}:${detectorId || 'all'}`;
+    try {
+        const cached = await streamRedisClient.get(cacheKey);
+        if (cached) { logger.info('Serving spec+transient history from cache (hours)', { cacheKey }); return res.json(JSON.parse(cached)); }
+        logger.info('Fetching spec+transient history from storage (hours)', { cacheKey, hours, detectorId });
 
-  try {
-    const cached = await streamRedisClient.get(cacheKey);
-    if (cached) { logger.info('Serving spec+transient history from cache', { cacheKey, username, detectorId }); return res.json(JSON.parse(cached)); }
+        const redisBoundaryMs = Date.now() - REDIS_SPEC_RETENTION_MS;
+        let redisResults = []; let dbResults = [];
+        const redisStartTimeMs = Math.max(startTimeMs, redisBoundaryMs);
 
-    logger.info('Fetching spec+transient history from storage (DB+Redis)', { cacheKey, username, detectorId, start: startTimeISO, end: endTimeISO });
-
-    const redisBoundaryMs = Date.now() - REDIS_SPEC_RETENTION_MS;
-    let redisResults = [];
-    let dbResults = [];
-
-    // 1. Query Redis for recent data (>= redisBoundaryMs)
-    const redisStartTimeMs = Math.max(startTimeMs, redisBoundaryMs);
-    if (endTimeMs >= redisStartTimeMs) {
-        const historyKeyPattern = detectorId ? `spectrogram_history:${detectorId}` : 'spectrogram_history:*';
-        const historyKeys = await streamRedisClient.keys(historyKeyPattern);
-        if (historyKeys.length > 0) {
-            const fetchPromises = historyKeys.map(key => streamRedisClient.lrange(key, 0, -1));
-            const allRecordsNested = await Promise.all(fetchPromises);
-            const allRecords = allRecordsNested.flat();
-            redisResults = allRecords
-              .map(r => { try { return JSON.parse(r); } catch { return null; } })
-              .filter(r => {
-                  if (!r || !r.timestamp) return false;
-                  const recordTime = new Date(r.timestamp).getTime();
-                  return recordTime >= redisStartTimeMs && recordTime <= endTimeMs && (detectorId ? r.detectorId === detectorId : true);
-              });
-             logger.debug(`Fetched ${redisResults.length} spectrogram records from Redis.`);
+        if (endTimeMs >= redisStartTimeMs) {
+            const historyKeyPattern = detectorId ? `spectrogram_history:${detectorId}` : 'spectrogram_history:*';
+            const historyKeys = await streamRedisClient.keys(historyKeyPattern);
+            if (historyKeys.length > 0) {
+                const fetchPromises = historyKeys.map(key => streamRedisClient.lrange(key, 0, -1));
+                const allRecordsNested = await Promise.all(fetchPromises);
+                const allRecords = allRecordsNested.flat();
+                redisResults = allRecords
+                  .map(r => { try { return JSON.parse(r); } catch { return null; } })
+                  .filter(r => { if (!r?.timestamp) return false; const t = new Date(r.timestamp).getTime(); return t >= redisStartTimeMs && t <= endTimeMs && (!detectorId || r.detectorId === detectorId); });
+                 logger.debug(`Fetched ${redisResults.length} spectrogram records from Redis (hours).`);
+            }
         }
-    }
-
-    // 2. Query DB for older data (< redisBoundaryMs)
-    if (startTimeMs < redisBoundaryMs) {
-        const dbStartTimeISO = new Date(startTimeMs).toISOString();
-        const dbEndTimeISO = new Date(redisBoundaryMs).toISOString();
-        logger.debug(`Querying DB for spectrograms between ${dbStartTimeISO} and ${dbEndTimeISO}`);
-        try {
-             // Phase 4d: Select transient_details as well
-             let queryText = `
-                SELECT detector_id, timestamp, location_lat, location_lon, spectrogram_data, transient_detected, transient_details
-                FROM historical_spectrograms
-                WHERE timestamp >= $1 AND timestamp < $2`;
-             const queryParams = [dbStartTimeISO, dbEndTimeISO];
-             if (detectorId) {
-                 queryText += ` AND detector_id = $3 ORDER BY timestamp ASC`;
-                 queryParams.push(detectorId);
-             } else {
-                  queryText += ` ORDER BY detector_id ASC, timestamp ASC`;
-             }
-            const dbRes = await db.query(queryText, queryParams);
-            // Phase 4d: Map DB results including transient_details into transientInfo
-            dbResults = dbRes.rows.map(row => ({
-                detectorId: row.detector_id,
-                timestamp: row.timestamp.toISOString(),
-                location: { lat: row.location_lat, lon: row.location_lon },
-                spectrogram: row.spectrogram_data,
-                transientInfo: {
-                    type: row.transient_detected ? (row.transient_details?.toLowerCase().includes('broadband') ? 'broadband' : (row.transient_details ? 'narrowband' : 'unknown')) : 'none',
-                    details: row.transient_details
-                }
-            }));
-            logger.debug(`Fetched ${dbResults.length} spectrogram records from DB.`);
-        } catch(dbErr) {
-            logger.error("Error querying historical spectrograms from DB", { error: dbErr.message, start: dbStartTimeISO, end: dbEndTimeISO, detector: detectorId });
+        if (startTimeMs < redisBoundaryMs) {
+            const dbStartTimeISO = new Date(startTimeMs).toISOString();
+            const dbEndTimeISO = new Date(redisBoundaryMs).toISOString();
+            try {
+                let queryText = `SELECT detector_id, timestamp, location_lat, location_lon, spectrogram_data, transient_detected, transient_details FROM historical_spectrograms WHERE timestamp >= $1 AND timestamp < $2`;
+                const queryParams = [dbStartTimeISO, dbEndTimeISO];
+                if (detectorId) { queryText += ` AND detector_id = $3 ORDER BY timestamp ASC`; queryParams.push(detectorId); }
+                else { queryText += ` ORDER BY detector_id ASC, timestamp ASC`; }
+                const dbRes = await db.query(queryText, queryParams);
+                dbResults = dbRes.rows.map(row => ({ detectorId: row.detector_id, timestamp: row.timestamp.toISOString(), location: { lat: row.location_lat, lon: row.location_lon }, spectrogram: row.spectrogram_data, transientInfo: { type: row.transient_detected ? (row.transient_details?.toLowerCase().includes('broadband') ? 'broadband' : (row.transient_details ? 'narrowband' : 'unknown')) : 'none', details: row.transient_details } }));
+                logger.debug(`Fetched ${dbResults.length} spectrogram records from DB (hours).`);
+            } catch (dbErr) { logger.error("Error querying historical spectrograms from DB (hours)", { error: dbErr.message }); }
         }
-    }
-
-    // 3. Combine and process results
-    const combinedResults = [...dbResults, ...redisResults];
-    combinedResults.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-    // Group data by detector ID, merging spectrogram arrays AND collecting transient events
-    const groupedData = combinedResults.reduce((acc, r) => {
-        if (!r.detectorId || !r.spectrogram || !r.location || !Array.isArray(r.spectrogram)) return acc;
-        const detId = r.detectorId;
-        acc[detId] = acc[detId] || { detectorId: detId, location: r.location, spectrograms: [], transientEvents: [] }; // Initialize transientEvents array
-
-        if (Array.isArray(r.spectrogram) && Array.isArray(r.spectrogram[0])) {
-            r.spectrogram.forEach(specRow => { if(Array.isArray(specRow)) { acc[detId].spectrograms.push(...specRow); } });
-        }
-
-        // Phase 4d: Collect transient events per detector
-        if (r.transientInfo && r.transientInfo.type !== 'none') {
-            acc[detId].transientEvents.push({
-                ts: new Date(r.timestamp).getTime(),
-                type: r.transientInfo.type,
-                details: r.transientInfo.details
-            });
-        }
-        return acc;
-    }, {});
-
-    // Phase 4e: Format final result to include transientEvents
-    const finalResult = Object.values(groupedData).map(group => ({
-        detectorId: group.detectorId,
-        location: group.location,
-        spectrogram: group.spectrograms, // Concatenated values
-        transientEvents: group.transientEvents // Include the collected events
-    }));
-
-    // Update caching if needed to include transients
-    if (finalResult.length > 0) {
-        await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult));
-        logger.info('Cached combined spec+transient historical data', { cacheKey, totalDetectors: finalResult.length });
-    }
-
-    res.json(finalResult);
-  } catch (err) { logger.error('Spec history fetch error (combined)', { username, hours, detectorId, startTime, endTime, error: err.message }); next(err); }
+        const combinedResults = [...dbResults, ...redisResults];
+        combinedResults.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const groupedData = combinedResults.reduce((acc, r) => {
+            if (!r.detectorId || !r.spectrogram || !r.location || !Array.isArray(r.spectrogram)) return acc;
+            const detId = r.detectorId;
+            acc[detId] = acc[detId] || { detectorId: detId, location: r.location, spectrograms: [], transientEvents: [] };
+            if (Array.isArray(r.spectrogram) && Array.isArray(r.spectrogram[0])) { r.spectrogram.forEach(specRow => { if(Array.isArray(specRow)) { acc[detId].spectrograms.push(...specRow); } }); }
+            if (r.transientInfo && r.transientInfo.type !== 'none') { acc[detId].transientEvents.push({ ts: new Date(r.timestamp).getTime(), type: r.transientInfo.type, details: r.transientInfo.details }); }
+            return acc;
+         }, {});
+        const finalResult = Object.values(groupedData).map(group => ({ detectorId: group.detectorId, location: group.location, spectrogram: group.spectrograms, transientEvents: group.transientEvents }));
+        if (finalResult.length > 0) { await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult)); logger.info('Cached combined spec+transient historical data (hours)', { cacheKey }); }
+        res.json(finalResult);
+    } catch (err) { logger.error('Spec history fetch error (hours)', { username, hours, detectorId, error: err.message }); next(err); }
 });
 
-
-// Historical Peak Data - Updated for Phase 3b (DB Query)
-// No changes needed here for Phase 4e unless we decide to store transient info with peaks too
-app.get('/history/peaks/:hours?', apiLimiter, authenticateToken, historyValidationRules, validateRequest, async (req, res, next) => {
-    const hours = req.params.hours ? parseInt(req.params.hours, 10) : null;
+// --- Route for Spectrogram History by RANGE ---
+app.get('/history/range', apiLimiter, authenticateToken, historyRangeValidationRules, validateRequest, async (req, res, next) => {
     const { startTime, endTime, detectorId } = req.query;
     const username = req.user.username;
-    const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(hours, startTime, endTime);
+    const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(null, startTime, endTime);
+    const cacheKey = `history_spec_transient:${rangeIdentifier}:${detectorId || 'all'}`;
+
+     try {
+        const cached = await streamRedisClient.get(cacheKey);
+        if (cached) { logger.info('Serving spec+transient history from cache (range)', { cacheKey }); return res.json(JSON.parse(cached)); }
+        logger.info('Fetching spec+transient history from storage (range)', { cacheKey, start: startTime, end: endTime, detectorId });
+
+        const redisBoundaryMs = Date.now() - REDIS_SPEC_RETENTION_MS;
+        let redisResults = []; let dbResults = [];
+        const redisStartTimeMs = Math.max(startTimeMs, redisBoundaryMs);
+
+        if (endTimeMs >= redisStartTimeMs) {
+             const historyKeyPattern = detectorId ? `spectrogram_history:${detectorId}` : 'spectrogram_history:*';
+             const historyKeys = await streamRedisClient.keys(historyKeyPattern);
+             if (historyKeys.length > 0) {
+                 const fetchPromises = historyKeys.map(key => streamRedisClient.lrange(key, 0, -1));
+                 const allRecordsNested = await Promise.all(fetchPromises);
+                 const allRecords = allRecordsNested.flat();
+                 redisResults = allRecords
+                   .map(r => { try { return JSON.parse(r); } catch { return null; } })
+                   .filter(r => { if (!r?.timestamp) return false; const t = new Date(r.timestamp).getTime(); return t >= redisStartTimeMs && t <= endTimeMs && (!detectorId || r.detectorId === detectorId); });
+                  logger.debug(`Fetched ${redisResults.length} spectrogram records from Redis (range).`);
+             }
+        }
+        if (startTimeMs < redisBoundaryMs) {
+             const dbStartTimeISO = new Date(startTimeMs).toISOString();
+             const dbEndTimeISO = new Date(redisBoundaryMs).toISOString();
+             try {
+                 let queryText = `SELECT detector_id, timestamp, location_lat, location_lon, spectrogram_data, transient_detected, transient_details FROM historical_spectrograms WHERE timestamp >= $1 AND timestamp < $2`;
+                 const queryParams = [dbStartTimeISO, dbEndTimeISO];
+                 if (detectorId) { queryText += ` AND detector_id = $3 ORDER BY timestamp ASC`; queryParams.push(detectorId); }
+                 else { queryText += ` ORDER BY detector_id ASC, timestamp ASC`; }
+                 const dbRes = await db.query(queryText, queryParams);
+                 dbResults = dbRes.rows.map(row => ({ detectorId: row.detector_id, timestamp: row.timestamp.toISOString(), location: { lat: row.location_lat, lon: row.location_lon }, spectrogram: row.spectrogram_data, transientInfo: { type: row.transient_detected ? (row.transient_details?.toLowerCase().includes('broadband') ? 'broadband' : (row.transient_details ? 'narrowband' : 'unknown')) : 'none', details: row.transient_details } }));
+                 logger.debug(`Fetched ${dbResults.length} spectrogram records from DB (range).`);
+             } catch (dbErr) { logger.error("Error querying historical spectrograms from DB (range)", { error: dbErr.message }); }
+        }
+        const combinedResults = [...dbResults, ...redisResults];
+        combinedResults.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const groupedData = combinedResults.reduce((acc, r) => {
+            if (!r.detectorId || !r.spectrogram || !r.location || !Array.isArray(r.spectrogram)) return acc;
+            const detId = r.detectorId;
+            acc[detId] = acc[detId] || { detectorId: detId, location: r.location, spectrograms: [], transientEvents: [] };
+            if (Array.isArray(r.spectrogram) && Array.isArray(r.spectrogram[0])) { r.spectrogram.forEach(specRow => { if(Array.isArray(specRow)) { acc[detId].spectrograms.push(...specRow); } }); }
+            if (r.transientInfo && r.transientInfo.type !== 'none') { acc[detId].transientEvents.push({ ts: new Date(r.timestamp).getTime(), type: r.transientInfo.type, details: r.transientInfo.details }); }
+            return acc;
+        }, {});
+        const finalResult = Object.values(groupedData).map(group => ({ detectorId: group.detectorId, location: group.location, spectrogram: group.spectrograms, transientEvents: group.transientEvents }));
+        if (finalResult.length > 0) { await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult)); logger.info('Cached combined spec+transient historical data (range)', { cacheKey }); }
+        res.json(finalResult);
+    } catch (err) { logger.error('Spec history fetch error (range)', { username, detectorId, startTime, endTime, error: err.message }); next(err); }
+});
+
+// --- Route for Peak History by HOURS ---
+app.get('/history/peaks/hours/:hours', apiLimiter, authenticateToken, historyHoursValidationRules, validateRequest, async (req, res, next) => {
+    const hours = parseInt(req.params.hours, 10);
+    const { detectorId } = req.query;
+    const username = req.user.username;
+    const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(hours, null, null);
     const cacheKey = `history_peaks:${rangeIdentifier}:${detectorId || 'all'}`;
 
     try {
         const cached = await streamRedisClient.get(cacheKey);
-        if (cached) { logger.info('Serving peak history from cache', { cacheKey, username, detectorId }); return res.json(JSON.parse(cached)); }
-
-        logger.info('Fetching peak history from storage', { cacheKey, username, detectorId, startMs: startTimeMs, endMs: endTimeMs });
+        if (cached) { logger.info('Serving peak history from cache (hours)', { cacheKey }); return res.json(JSON.parse(cached)); }
+        logger.info('Fetching peak history from storage (hours)', { cacheKey, hours, detectorId });
 
         const redisBoundaryMs = Date.now() - REDIS_PEAK_RETENTION_MS;
-        let redisPeakResults = [];
-        let dbPeakResults = [];
-
+        let redisPeakResults = []; let dbPeakResults = [];
         const redisStartTimeMs = Math.max(startTimeMs, redisBoundaryMs);
-         if (endTimeMs >= redisStartTimeMs) {
+
+        if (endTimeMs >= redisStartTimeMs) {
             const peakKeyPattern = detectorId ? `peaks:${detectorId}` : 'peaks:*';
             const peakKeys = await streamRedisClient.keys(peakKeyPattern);
             if (peakKeys.length > 0) {
@@ -352,71 +353,91 @@ app.get('/history/peaks/:hours?', apiLimiter, authenticateToken, historyValidati
                     const detId = key.split(':')[1];
                     const peakStringsWithScores = await streamRedisClient.zrangebyscore(key, redisStartTimeMs, endTimeMs, 'WITHSCORES');
                     const peaksWithTs = [];
-                    for (let i = 0; i < peakStringsWithScores.length; i += 2) {
-                         try {
-                            const peakData = JSON.parse(peakStringsWithScores[i]);
-                            peaksWithTs.push({
-                                ts: parseInt(peakStringsWithScores[i+1], 10),
-                                peaks: peakData
-                                // transientDetected: Needs separate lookup if required here
-                            });
-                         } catch {}
-                    }
+                    for (let i = 0; i < peakStringsWithScores.length; i += 2) { try { peaksWithTs.push({ ts: parseInt(peakStringsWithScores[i+1], 10), peaks: JSON.parse(peakStringsWithScores[i]) }); } catch {} }
                     return { detectorId: detId, peaks: peaksWithTs };
                 });
                  redisPeakResults = await Promise.all(fetchPromises);
-                 logger.debug(`Fetched ${redisPeakResults.reduce((sum, d) => sum + d.peaks.length, 0)} peak entries from Redis.`);
+                 logger.debug(`Fetched ${redisPeakResults.reduce((sum, d) => sum + d.peaks.length, 0)} peak entries from Redis (hours).`);
             }
-         }
-
+        }
         if (startTimeMs < redisBoundaryMs) {
             const dbStartTimeISO = new Date(startTimeMs).toISOString();
             const dbEndTimeISO = new Date(redisBoundaryMs).toISOString();
-            logger.debug(`Querying DB for peaks between ${dbStartTimeISO} and ${dbEndTimeISO}`);
             try {
-                let queryText = `
-                    SELECT detector_id, timestamp, peak_data
-                    FROM historical_peaks
-                    WHERE timestamp >= $1 AND timestamp < $2`;
+                let queryText = `SELECT detector_id, timestamp, peak_data FROM historical_peaks WHERE timestamp >= $1 AND timestamp < $2`;
                 const queryParams = [dbStartTimeISO, dbEndTimeISO];
-                 if (detectorId) {
-                     queryText += ` AND detector_id = $3 ORDER BY timestamp ASC`;
-                     queryParams.push(detectorId);
-                 } else {
-                      queryText += ` ORDER BY detector_id ASC, timestamp ASC`;
-                 }
+                if (detectorId) { queryText += ` AND detector_id = $3 ORDER BY timestamp ASC`; queryParams.push(detectorId); }
+                else { queryText += ` ORDER BY detector_id ASC, timestamp ASC`; }
                 const dbRes = await db.query(queryText, queryParams);
-                const dbResultsGrouped = dbRes.rows.reduce((acc, row) => {
-                    const detId = row.detector_id;
-                    acc[detId] = acc[detId] || { detectorId: detId, peaks: [] };
-                    acc[detId].peaks.push({
-                        ts: row.timestamp.getTime(),
-                        peaks: row.peak_data
-                    });
-                    return acc;
-                }, {});
+                const dbResultsGrouped = dbRes.rows.reduce((acc, row) => { const dId = row.detector_id; acc[dId]=acc[dId]||{detectorId:dId, peaks:[]}; acc[dId].peaks.push({ts:row.timestamp.getTime(), peaks:row.peak_data}); return acc; }, {});
                 dbPeakResults = Object.values(dbResultsGrouped);
-                 logger.debug(`Fetched ${dbRes.rows.length} peak entries from DB.`);
-            } catch(dbErr) {
-                 logger.error("Error querying historical peaks from DB", { error: dbErr.message, start: dbStartTimeISO, end: dbEndTimeISO, detector: detectorId });
-            }
+                logger.debug(`Fetched ${dbRes.rows.length} peak entries from DB (hours).`);
+            } catch(dbErr) { logger.error("Error querying historical peaks from DB (hours)", { error: dbErr.message }); }
         }
-
         const combinedResultsMap = {};
-        dbPeakResults.forEach(detData => { combinedResultsMap[detData.detectorId] = { detectorId: detData.detectorId, peaks: [...detData.peaks] }; });
-        redisPeakResults.forEach(detData => {
-            if (combinedResultsMap[detData.detectorId]) { combinedResultsMap[detData.detectorId].peaks.push(...detData.peaks); }
-            else { combinedResultsMap[detData.detectorId] = { detectorId: detData.detectorId, peaks: [...detData.peaks] }; }
-        });
-        Object.values(combinedResultsMap).forEach(detData => { detData.peaks.sort((a, b) => a.ts - b.ts); });
-
+        dbPeakResults.forEach(d => { combinedResultsMap[d.detectorId] = {detectorId:d.detectorId, peaks:[...d.peaks]}; });
+        redisPeakResults.forEach(d => { if(combinedResultsMap[d.detectorId]) {combinedResultsMap[d.detectorId].peaks.push(...d.peaks);} else {combinedResultsMap[d.detectorId]={detectorId:d.detectorId, peaks:[...d.peaks]};} });
+        Object.values(combinedResultsMap).forEach(d => d.peaks.sort((a, b) => a.ts - b.ts));
         const finalResult = Object.values(combinedResultsMap);
-
-        if (finalResult.length > 0) { await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult)); logger.info('Cached combined peak historical data', { cacheKey, totalDetectors: finalResult.length }); }
+        if (finalResult.length > 0) { await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult)); logger.info('Cached combined peak historical data (hours)', { cacheKey }); }
         res.json(finalResult);
-    } catch (err) { logger.error('Peak history fetch error (combined)', { username, hours, detectorId, startTime, endTime, error: err.message }); next(err); }
+    } catch (err) { logger.error('Peak history fetch error (hours)', { username, hours, detectorId, error: err.message }); next(err); }
 });
 
+// --- Route for Peak History by RANGE ---
+app.get('/history/peaks/range', apiLimiter, authenticateToken, historyRangeValidationRules, validateRequest, async (req, res, next) => {
+    const { startTime, endTime, detectorId } = req.query;
+    const username = req.user.username;
+    const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(null, startTime, endTime);
+    const cacheKey = `history_peaks:${rangeIdentifier}:${detectorId || 'all'}`;
+
+    try {
+        const cached = await streamRedisClient.get(cacheKey);
+        if (cached) { logger.info('Serving peak history from cache (range)', { cacheKey }); return res.json(JSON.parse(cached)); }
+        logger.info('Fetching peak history from storage (range)', { cacheKey, start: startTime, end: endTime, detectorId });
+
+        const redisBoundaryMs = Date.now() - REDIS_PEAK_RETENTION_MS;
+        let redisPeakResults = []; let dbPeakResults = [];
+        const redisStartTimeMs = Math.max(startTimeMs, redisBoundaryMs);
+
+        if (endTimeMs >= redisStartTimeMs) {
+            const peakKeyPattern = detectorId ? `peaks:${detectorId}` : 'peaks:*';
+            const peakKeys = await streamRedisClient.keys(peakKeyPattern);
+            if (peakKeys.length > 0) {
+                const fetchPromises = peakKeys.map(async (key) => {
+                    const detId = key.split(':')[1];
+                    const peakStringsWithScores = await streamRedisClient.zrangebyscore(key, redisStartTimeMs, endTimeMs, 'WITHSCORES');
+                    const peaksWithTs = [];
+                    for (let i = 0; i < peakStringsWithScores.length; i += 2) { try { peaksWithTs.push({ ts: parseInt(peakStringsWithScores[i+1], 10), peaks: JSON.parse(peakStringsWithScores[i]) }); } catch {} }
+                    return { detectorId: detId, peaks: peaksWithTs };
+                });
+                 redisPeakResults = await Promise.all(fetchPromises);
+                 logger.debug(`Fetched ${redisPeakResults.reduce((sum, d) => sum + d.peaks.length, 0)} peak entries from Redis (range).`);
+            }
+        }
+        if (startTimeMs < redisBoundaryMs) {
+            const dbStartTimeISO = new Date(startTimeMs).toISOString();
+            const dbEndTimeISO = new Date(redisBoundaryMs).toISOString();
+            try {
+                let queryText = `SELECT detector_id, timestamp, peak_data FROM historical_peaks WHERE timestamp >= $1 AND timestamp < $2`;
+                const queryParams = [dbStartTimeISO, dbEndTimeISO];
+                if (detectorId) { queryText += ` AND detector_id = $3 ORDER BY timestamp ASC`; queryParams.push(detectorId); }
+                else { queryText += ` ORDER BY detector_id ASC, timestamp ASC`; }
+                const dbRes = await db.query(queryText, queryParams);
+                const dbResultsGrouped = dbRes.rows.reduce((acc, row) => { const dId = row.detector_id; acc[dId]=acc[dId]||{detectorId:dId, peaks:[]}; acc[dId].peaks.push({ts:row.timestamp.getTime(), peaks:row.peak_data}); return acc; }, {});
+                dbPeakResults = Object.values(dbResultsGrouped);
+                logger.debug(`Fetched ${dbRes.rows.length} peak entries from DB (range).`);
+            } catch(dbErr) { logger.error("Error querying historical peaks from DB (range)", { error: dbErr.message }); }
+        }
+        const combinedResultsMap = {};
+        dbPeakResults.forEach(d => { combinedResultsMap[d.detectorId] = {detectorId:d.detectorId, peaks:[...d.peaks]}; });
+        redisPeakResults.forEach(d => { if(combinedResultsMap[d.detectorId]) {combinedResultsMap[d.detectorId].peaks.push(...d.peaks);} else {combinedResultsMap[d.detectorId]={detectorId:d.detectorId, peaks:[...d.peaks]};} });
+        Object.values(combinedResultsMap).forEach(d => d.peaks.sort((a, b) => a.ts - b.ts));
+        const finalResult = Object.values(combinedResultsMap);
+        if (finalResult.length > 0) { await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult)); logger.info('Cached combined peak historical data (range)', { cacheKey }); }
+        res.json(finalResult);
+    } catch (err) { logger.error('Peak history fetch error (range)', { username, detectorId, startTime, endTime, error: err.message }); next(err); }
+});
 
 // Data Ingest Endpoint
 const ingestValidationRules = [
@@ -514,19 +535,17 @@ async function processStreamMessages() {
                                 ...parsedMessage,
                                 spectrogram: downsampledBatch,
                                 detectedPeaks: allDetectedPeaksForWs,
-                                transientInfo: transientResult // Include full transient info
+                                transientInfo: transientResult
                             };
                             const messageString = JSON.stringify(dataToProcess);
 
                             const historyKey = `spectrogram_history:${parsedMessage.detectorId}`;
-                            // Store data including transientInfo
                             historyPipeline.lpush(historyKey, messageString);
                             historyPipeline.ltrim(historyKey, 0, 999);
                             logger.debug("Adding processed data to history list", { key: historyKey, numRows: downsampledBatch.length, transientType: transientResult.type });
 
                             await historyPipeline.exec();
 
-                            // Broadcast data (including transientInfo)
                             let sentCount = 0;
                             logger.debug(`Broadcasting message ${messageId} to ${wss.clients.size} potential clients`, { detectorId: parsedMessage.detectorId, peakCount: allDetectedPeaksForWs.length, transientType: transientResult.type });
                             for (const ws of wss.clients) {
@@ -624,7 +643,6 @@ async function cleanupOldHistory() {
         setTimeout(cleanupOldHistory, CLEANUP_INTERVAL_MS);
     }
 }
-
 
 // --- Centralized Error Handling Middleware ---
 app.use((err, req, res, next) => {

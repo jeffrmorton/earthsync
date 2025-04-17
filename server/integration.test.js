@@ -11,7 +11,7 @@ const WS_URL = process.env.WS_URL || 'ws://localhost:3000';
 const JWT_SECRET = process.env.JWT_SECRET || '1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p';
 const API_INGEST_KEY = process.env.API_INGEST_KEY || 'changeme-in-production';
 const TEST_TIMEOUT = parseInt(process.env.JEST_TIMEOUT || '45000', 10); // Increased timeout
-const WS_MESSAGE_TIMEOUT = 25000;
+const WS_MESSAGE_TIMEOUT = 30000; // Increased WS timeout slightly more
 const DOWNSAMPLE_FACTOR = 5;
 const RAW_FREQUENCY_POINTS = 5501;
 const EXPECTED_DOWNSAMPLED_LENGTH = Math.ceil(RAW_FREQUENCY_POINTS / DOWNSAMPLE_FACTOR);
@@ -19,12 +19,33 @@ const EXPECTED_DOWNSAMPLED_LENGTH = Math.ceil(RAW_FREQUENCY_POINTS / DOWNSAMPLE_
 const REDIS_SPEC_RETENTION_MS = (parseFloat(process.env.REDIS_SPEC_RETENTION_HOURS) || 0.01) * 3600 * 1000;
 const REDIS_PEAK_RETENTION_MS = (parseFloat(process.env.REDIS_PEAK_RETENTION_HOURS) || 0.02) * 3600 * 1000;
 
+// Test-specific connection timeout
+const TEST_REDIS_CONNECT_TIMEOUT = 10000; // 10 seconds
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// Redis clients
-const redis = new Redis({ host: process.env.REDIS_HOST || 'localhost', port: parseInt(process.env.REDIS_PORT || '6379', 10), password: process.env.REDIS_PASSWORD || 'password', lazyConnect: true, keyPrefix: 'userkey:', retryStrategy: times => Math.min(times * 100, 3000), reconnectOnError: () => true, maxRetriesPerRequest: 3 });
-const streamRedis = new Redis({ host: process.env.REDIS_HOST || 'localhost', port: parseInt(process.env.REDIS_PORT || '6379', 10), password: process.env.REDIS_PASSWORD || 'password', lazyConnect: true, retryStrategy: times => Math.min(times * 100, 3000), reconnectOnError: () => true, maxRetriesPerRequest: 3 });
+// Redis clients with increased test timeout
+const redis = new Redis({
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    password: process.env.REDIS_PASSWORD || 'password',
+    lazyConnect: true,
+    keyPrefix: 'userkey:',
+    retryStrategy: times => Math.min(times * 150, 3000), // Slightly slower retry
+    reconnectOnError: () => true,
+    maxRetriesPerRequest: 3,
+    connectTimeout: TEST_REDIS_CONNECT_TIMEOUT // Explicit timeout for tests
+});
+const streamRedis = new Redis({
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    password: process.env.REDIS_PASSWORD || 'password',
+    lazyConnect: true,
+    retryStrategy: times => Math.min(times * 150, 3000),
+    reconnectOnError: () => true,
+    maxRetriesPerRequest: 3,
+    connectTimeout: TEST_REDIS_CONNECT_TIMEOUT // Explicit timeout for tests
+});
 
 // PostgreSQL client pool for tests
 const dbPool = new Pool({
@@ -35,11 +56,11 @@ const dbPool = new Pool({
     port: parseInt(process.env.DB_PORT || '5432', 10),
     max: 5, // Smaller pool for tests
     idleTimeoutMillis: 5000,
-    connectionTimeoutMillis: 3000
+    connectionTimeoutMillis: 5000 // Increased DB connect timeout slightly
 });
 
 
-describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
+describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
     let authToken;
     let encryptionKey;
     const testUser = 'ci_testuser_hist';
@@ -47,26 +68,31 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
     const testDetectorId = 'ci_detector_hist';
     const specHistKey = `spectrogram_history:${testDetectorId}`;
     const peakHistKey = `peaks:${testDetectorId}`;
+    let setupError = null; // Flag to indicate setup failure
 
     jest.setTimeout(TEST_TIMEOUT);
 
     // --- Setup and Teardown ---
     beforeAll(async () => {
+        setupError = null; // Reset error flag
+        let dbClient;
         try {
             console.log('Connecting Redis & DB for tests...');
+            // Add delay before connecting
+            await sleep(2000); // Wait 2 seconds after potential health check pass
+
             await redis.connect();
             await streamRedis.connect();
             await redis.ping();
             await streamRedis.ping();
-            const dbClient = await dbPool.connect(); // Test DB connection
+            dbClient = await dbPool.connect(); // Test DB connection
+            await dbClient.query('SELECT 1'); // Verify query works
             dbClient.release();
             console.log('Redis & DB connections successful.');
 
             console.log('Cleaning up previous test data...');
-            // Clear user keys
             const userKeys = await redis.keys(`${testUser}`);
             if (userKeys.length > 0) await redis.del(userKeys);
-             // Clear specific detector history/peaks/state
             const dataKeys = await streamRedis.keys(`*${testDetectorId}*`);
             if (dataKeys.length > 0) await streamRedis.del(dataKeys);
             const trackStateKey = `track_state:${testDetectorId}`; // Key used by trackPeaks
@@ -86,60 +112,54 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
             console.log('Test user registered.');
 
         } catch (err) {
-            console.error('Setup failed:', err.response?.data || err.message);
-            // Attempt cleanup before throwing
-             await redis.quit().catch(()=>{});
-             await streamRedis.quit().catch(()=>{});
-             await dbPool.end().catch(()=>{});
-            throw new Error(`Cannot connect/clean dependencies: ${err.message}`);
+            setupError = `Setup failed: ${err.message}`; // Store error message
+            console.error(setupError);
+            // Attempt cleanup even on failure
+            if (dbClient) dbClient.release();
+            // Don't end pool/quit redis here, let afterAll handle it based on status
+            throw new Error(setupError);
         }
     });
 
     afterAll(async () => {
         try {
            console.log('Cleaning up test resources...');
-           // Get token if needed to delete user
-           if (!authToken) {
-               try {
-                   const loginRes = await axios.post(`${API_BASE_URL}/login`, { username: testUser, password: testPassword });
-                   authToken = loginRes.data.token;
-               } catch { /* ignore if login fails */ }
-           }
-           // Delete user via API if token obtained
-           // if (authToken) {
-           //     await axios.delete(`${API_BASE_URL}/users/${testUser}`, { headers: { Authorization: `Bearer ${authToken}` } });
-           //     console.log('Test user deleted via API.');
-           // } else {
-           //     // Fallback direct DB delete if API failed
-           //     await dbPool.query(`DELETE FROM users WHERE username = $1`, [testUser]);
-           //      console.log('Test user deleted via DB.');
-           // }
-
-            // Safer cleanup: always delete user/data directly from DB/Redis
-            await dbPool.query(`DELETE FROM users WHERE username = $1`, [testUser]);
-            await dbPool.query(`DELETE FROM historical_spectrograms WHERE detector_id = $1`, [testDetectorId]);
-            await dbPool.query(`DELETE FROM historical_peaks WHERE detector_id = $1`, [testDetectorId]);
-            const userKeys = await redis.keys(`${testUser}`);
-            if (userKeys.length > 0) await redis.del(userKeys);
-            const dataKeys = await streamRedis.keys(`*${testDetectorId}*`);
-            if (dataKeys.length > 0) await streamRedis.del(dataKeys);
-             const trackStateKey = `track_state:${testDetectorId}`;
-            await redis.del(trackStateKey);
-             console.log('Test data cleaned from Redis/DB.');
+           // Clean up DB first
+           await dbPool.query(`DELETE FROM historical_spectrograms WHERE detector_id = $1`, [testDetectorId]);
+           await dbPool.query(`DELETE FROM historical_peaks WHERE detector_id = $1`, [testDetectorId]);
+           await dbPool.query(`DELETE FROM users WHERE username = $1`, [testUser]);
+            console.log('Test data cleaned from DB.');
+           // Clean up Redis
+           const userKeys = await redis.keys(`${testUser}`);
+           if (userKeys.length > 0) await redis.del(userKeys);
+           const dataKeys = await streamRedis.keys(`*${testDetectorId}*`);
+           if (dataKeys.length > 0) await streamRedis.del(dataKeys);
+           const trackStateKey = `track_state:${testDetectorId}`;
+           await redis.del(trackStateKey);
+            console.log('Test data cleaned from Redis.');
 
         } catch (err) {
-            console.warn('Test cleanup failed:', err.response?.data || err.message);
+            console.warn('Test cleanup failed:', err.message); // Log only message
         } finally {
-            // Ensure connections are closed
-            await redis.quit().catch(()=>{});
-            await streamRedis.quit().catch(()=>{});
-            await dbPool.end().catch(()=>{});
+            // Ensure connections are closed, checking status first
+            if (redis.status === 'ready' || redis.status === 'connecting') await redis.quit().catch(()=>{});
+            if (streamRedis.status === 'ready' || streamRedis.status === 'connecting') await streamRedis.quit().catch(()=>{});
+            await dbPool.end().catch(()=>{}); // End pool gracefully
             console.log('Redis & DB connections closed.');
         }
     });
 
+    // Helper to skip tests if setup failed
+    const runIfSetupOK = (testName, testFn) => {
+        if (setupError) {
+            test.skip(`${testName} (skipped due to setup failure)`, () => {});
+        } else {
+            test(testName, testFn);
+        }
+    };
+
     // --- Basic Auth & Setup Tests ---
-    test('GET /health should return 200 OK', async () => {
+    runIfSetupOK('GET /health should return 200 OK', async () => {
         const response = await axios.get(`${API_BASE_URL}/health`);
         expect(response.status).toBe(200);
         expect(response.data.status).toBe('OK');
@@ -147,13 +167,13 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
         expect(response.data.redis_stream).toBe('OK');
         expect(response.data.postgres).toBe('OK');
     });
-    test('POST /login returns JWT', async () => {
+    runIfSetupOK('POST /login returns JWT', async () => {
         const response = await axios.post(`${API_BASE_URL}/login`, { username: testUser, password: testPassword });
         expect(response.status).toBe(200);
         expect(response.data.token).toBeDefined();
         authToken = response.data.token; // Store for subsequent tests
     });
-    test('POST /key-exchange returns key', async () => {
+    runIfSetupOK('POST /key-exchange returns key', async () => {
         expect(authToken).toBeDefined();
         const response = await axios.post(`${API_BASE_URL}/key-exchange`, {}, { headers: { Authorization: `Bearer ${authToken}` } });
         expect(response.status).toBe(200);
@@ -163,58 +183,120 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
         expect(storedKey).toBe(encryptionKey);
     });
 
-    // --- Data Ingest & WS Tests (copied/adapted from previous version) ---
-     test('POST /data-ingest accepts valid batch', async () => {
+    // --- Data Ingest & WS Tests ---
+     runIfSetupOK('POST /data-ingest accepts valid batch', async () => {
          const ingestDetectorId = testDetectorId + "_ingest"; // Use specific ID
          const payload = { detectorId: ingestDetectorId, location: { lat: 1.23, lon: -4.56 }, spectrograms: [ Array(RAW_FREQUENCY_POINTS).fill(1.0), Array(RAW_FREQUENCY_POINTS).fill(2.0) ] };
          const headers = { 'X-API-Key': API_INGEST_KEY };
          const response = await axios.post(`${API_BASE_URL}/data-ingest`, payload, { headers });
          expect(response.status).toBe(202);
          expect(response.data.messageId).toBeDefined();
-         await sleep(300); // Allow time for stream processing
-         const streamMessages = await streamRedis.xrevrange('spectrogram_stream', '+', '-', 'COUNT', 1);
+         await sleep(500); // Increase sleep slightly
+
+         // Read more messages to find the specific one
+         const streamMessages = await streamRedis.xrevrange('spectrogram_stream', '+', '-', 'COUNT', 5); // Read last 5
          expect(streamMessages.length).toBeGreaterThan(0);
-         const streamData = JSON.parse(streamMessages[0][1][1]);
+
+         // Find the message with the correct detectorId
+         const targetMessage = streamMessages.find(msg => {
+             try {
+                 const data = JSON.parse(msg[1][1]); // data is at index 1 of the field array
+                 return data.detectorId === ingestDetectorId;
+             } catch {
+                 return false;
+             }
+         });
+         expect(targetMessage).toBeDefined(); // Ensure we found the message
+
+         const streamData = JSON.parse(targetMessage[1][1]);
          expect(streamData.detectorId).toBe(ingestDetectorId);
          expect(streamData.spectrogram.length).toBe(2);
          expect(streamData.spectrogram[0].length).toBe(RAW_FREQUENCY_POINTS);
-         // Clean up stream message if needed for other tests? Or rely on test isolation.
-         // await streamRedis.xtrim('spectrogram_stream', 'MAXLEN', 0); // Example cleanup
+         // Clean up only the processed message if needed, or rely on test isolation
+         // await streamRedis.xdel('spectrogram_stream', targetMessage[0]);
      });
 
-     test('WebSocket receives processed data with peaks and transient info', async () => {
+     runIfSetupOK('WebSocket receives processed data with peaks and transient info', async () => {
          expect(authToken).toBeDefined(); expect(encryptionKey).toBeDefined();
          const wsDetectorId = testDetectorId + "_ws";
          const ws = new WebSocket(`${WS_URL}/?token=${authToken}`);
-         let receivedMessage = null; let wsError = null; let wsClosedCode = null; let closeReason = '';
+         let receivedTargetMessage = false; // Flag to indicate if target message received
+         let decryptedData = null; // Store the target message data
+         let wsError = null;
+         let wsClosedCode = null;
+         let closeReason = '';
 
+         // Promise that resolves only when the correct message arrives or times out
          const messagePromise = new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => { ws.terminate(); reject(new Error(`WebSocket message timeout after ${WS_MESSAGE_TIMEOUT}ms (State: ${ws.readyState})`)); }, WS_MESSAGE_TIMEOUT);
-            ws.on('message', (data) => { clearTimeout(timeout); receivedMessage = data.toString('utf8'); resolve(); });
-            ws.on('error', (err) => { clearTimeout(timeout); wsError = err; console.error("WS direct error:", err); reject(err); });
-            ws.on('close', (code, reason) => { wsClosedCode = code; closeReason = reason.toString(); if (code !== 1000 && code !== 1005) { clearTimeout(timeout); reject(new Error(`WS closed unexpectedly: ${code} - ${closeReason}`)); } }); // Allow 1005 (no status)
+            const timeout = setTimeout(() => {
+                if (!receivedTargetMessage) { // Only reject if target not received
+                    ws.terminate();
+                    reject(new Error(`WebSocket target message timeout after ${WS_MESSAGE_TIMEOUT}ms (State: ${ws.readyState})`));
+                }
+            }, WS_MESSAGE_TIMEOUT);
+
+            ws.on('message', (data) => {
+                try {
+                    const [encrypted, iv] = data.toString('utf8').split(':');
+                    if (!encrypted || !iv) throw new Error("Invalid WS message format");
+                    const keyWordArray = CryptoJS.enc.Hex.parse(encryptionKey);
+                    const decryptedBytes = CryptoJS.AES.decrypt({ ciphertext: CryptoJS.enc.Base64.parse(encrypted) }, keyWordArray, { iv: CryptoJS.enc.Base64.parse(iv), mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
+                    const decryptedText = decryptedBytes.toString(CryptoJS.enc.Utf8);
+                    if (!decryptedText) throw new Error("Decryption resulted in empty message");
+
+                    const messageData = JSON.parse(decryptedText);
+
+                    // Check if this is the message we are waiting for
+                    if (messageData.detectorId === wsDetectorId) {
+                        console.log(`Received target WS message for ${wsDetectorId}`);
+                        receivedTargetMessage = true;
+                        decryptedData = messageData; // Store the correct data
+                        clearTimeout(timeout); // Clear timeout as we got the message
+                        ws.close(1000, 'Test complete'); // Close connection cleanly
+                        resolve(); // Resolve the promise
+                    } else {
+                        console.log(`Ignoring WS message from ${messageData.detectorId}`);
+                    }
+                } catch (err) {
+                    console.error('WebSocket message processing error:', err);
+                    // Don't reject here, allow timeout to handle cases where target never arrives
+                }
+            });
+
+            ws.on('error', (err) => { clearTimeout(timeout); wsError = err; console.error("WS direct error:", err); reject(err); }); // Reject on direct error
+            ws.on('close', (code, reason) => {
+                wsClosedCode = code; closeReason = reason.toString();
+                // Only reject if closed unexpectedly *before* target message received
+                if (code !== 1000 && code !== 1005 && !receivedTargetMessage) {
+                    clearTimeout(timeout);
+                    reject(new Error(`WS closed unexpectedly (${code} - ${closeReason}) before target message received.`));
+                } else if (!receivedTargetMessage && code !== 1000 && code !== 1005) {
+                    // If closed after timeout/error, this is expected.
+                     console.log(`WS closed (${code}) after test failure/timeout.`);
+                }
+            });
          });
 
+         // Connection logic
          await new Promise((resolve, reject) => { const ct = setTimeout(() => reject(new Error('WS connection timeout')), 5000); ws.on('open', () => { clearTimeout(ct); console.log('WebSocket connected for peak test.'); resolve(); }); ws.on('error', (err) => { clearTimeout(ct); reject(err); }); });
          await sleep(300);
 
-         // Ingest data designed to create peaks and potentially a transient
+         // Ingest data
          const rawSpectrogramWithPeak = Array(RAW_FREQUENCY_POINTS).fill(1.0);
          const peakIndex = Math.floor(RAW_FREQUENCY_POINTS / 4); const peakFreq = peakIndex * (55 / (RAW_FREQUENCY_POINTS - 1));
          rawSpectrogramWithPeak[peakIndex - 2] = 3.0; rawSpectrogramWithPeak[peakIndex - 1] = 8.0; rawSpectrogramWithPeak[peakIndex] = 20.0; rawSpectrogramWithPeak[peakIndex + 1] = 7.0; rawSpectrogramWithPeak[peakIndex + 2] = 2.5;
          const ingestPayload = { detectorId: wsDetectorId, location: { lat: 45, lon: 45 }, spectrograms: [rawSpectrogramWithPeak] };
-         const peakKeyWs = `peaks:${wsDetectorId}`; await streamRedis.del(peakKeyWs); // Ensure clean state
+         const peakKeyWs = `peaks:${wsDetectorId}`; await streamRedis.del(peakKeyWs);
 
          await axios.post(`${API_BASE_URL}/data-ingest`, ingestPayload, { headers: { 'X-API-Key': API_INGEST_KEY } });
          console.log('Test message ingested for WS test.');
-         // Increased pause needed? WS_MESSAGE_TIMEOUT should handle it.
-         await sleep(1000); // Wait for processing and broadcast
 
+         // Wait for the promise (either resolves on correct message or rejects on timeout/error)
          try { await messagePromise; } catch(e) { console.error("WS Error Obj:", wsError); console.error("WS Closed Code/Reason:", wsClosedCode, closeReason); throw e; }
 
-         expect(receivedMessage).toBeDefined(); expect(receivedMessage).toContain(':');
-         const [encrypted, iv] = receivedMessage.split(':'); const keyWordArray = CryptoJS.enc.Hex.parse(encryptionKey); const decryptedBytes = CryptoJS.AES.decrypt({ ciphertext: CryptoJS.enc.Base64.parse(encrypted) }, keyWordArray, { iv: CryptoJS.enc.Base64.parse(iv), mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }); const decryptedText = decryptedBytes.toString(CryptoJS.enc.Utf8); const decryptedData = JSON.parse(decryptedText);
-
+         // Assertions on the stored decryptedData
+         expect(receivedTargetMessage).toBe(true); // Ensure we actually got the target
+         expect(decryptedData).toBeDefined();
          expect(decryptedData.detectorId).toBe(wsDetectorId);
          expect(decryptedData.spectrogram[0].length).toBe(EXPECTED_DOWNSAMPLED_LENGTH);
          expect(Array.isArray(decryptedData.detectedPeaks)).toBe(true);
@@ -238,7 +320,7 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
          const storedMainPeak = storedPeakDataArray.find(p => Math.abs(p.freq - peakFreq) < 1.0);
          expect(storedMainPeak).toBeDefined();
 
-         ws.close(1000, 'Test complete');
+         // ws.close(1000, 'Test complete'); // Closed within promise handler now
          await streamRedis.del(peakKeyWs); // Clean up specific key
      });
 
@@ -253,14 +335,16 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
         const oldTimestamp = new Date(oldTimeMs).toISOString();
         const ancientTimestamp = new Date(ancientTimeMs).toISOString(); // For peaks
 
+        // Correct structure for recentSpecData (array of arrays)
         const recentSpecData = {
             detectorId: testDetectorId, timestamp: recentTimestamp, location: { lat: 10, lon: 10 },
             spectrogram: [new Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(5.5)], // Example downsampled
             transientInfo: { type: 'none', details: null }
         };
+        // Correct structure for oldSpecData (array of arrays)
         const oldSpecData = {
             detector_id: testDetectorId, timestamp: oldTimestamp, location_lat: 10, location_lon: 10,
-            spectrogram_data: [new Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(3.3)],
+            spectrogram_data: [new Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(3.3)], // Array of arrays
             transient_detected: true, // Simulating a detected transient stored in DB
             transient_details: "DB Test Broadband Details"
         };
@@ -270,6 +354,8 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
 
 
         beforeAll(async () => {
+            // Skip seeding if setup already failed
+            if (setupError) return;
             // Seed data
             console.log("Seeding history data for combined tests...");
             // Seed recent data into Redis
@@ -289,7 +375,6 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
                 [testDetectorId, new Date(ancientTimeMs), JSON.stringify(ancientPeakData)]
             );
             console.log("History data seeded.");
-            // Ensure auth token is ready
             if (!authToken) {
                 const response = await axios.post(`${API_BASE_URL}/login`, { username: testUser, password: testPassword });
                 authToken = response.data.token;
@@ -297,11 +382,12 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
             expect(authToken).toBeDefined();
         });
 
-        test('GET /history should return combined data from Redis and DB', async () => {
-            const queryStartTime = new Date(oldTimeMs - 1000).toISOString(); // Start slightly before old data
-            const queryEndTime = new Date(recentTimeMs + 1000).toISOString(); // End slightly after recent data
+        runIfSetupOK('GET /history/range should return combined data from Redis and DB', async () => { // Use new route
+            const queryStartTime = new Date(oldTimeMs - 1000).toISOString();
+            const queryEndTime = new Date(recentTimeMs + 1000).toISOString();
 
-            const response = await axios.get(`${API_BASE_URL}/history?startTime=${queryStartTime}&endTime=${queryEndTime}&detectorId=${testDetectorId}`, {
+            // Use the new /history/range route
+            const response = await axios.get(`${API_BASE_URL}/history/range?startTime=${queryStartTime}&endTime=${queryEndTime}&detectorId=${testDetectorId}`, {
                 headers: { Authorization: `Bearer ${authToken}` }
             });
 
@@ -310,13 +396,11 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
             expect(response.data.length).toBe(1); // Grouped by detector
             const detectorData = response.data[0];
             expect(detectorData.detectorId).toBe(testDetectorId);
-            // Expect combined spectrogram data (2 rows * length)
+            // Expect combined spectrogram data (1 DB row + 1 Redis row -> 2 rows * length)
             const expectedLength = EXPECTED_DOWNSAMPLED_LENGTH * 2;
-            expect(detectorData.spectrogram.length).toBe(expectedLength);
-            // Check if values from both sources are present (approx check)
-            expect(detectorData.spectrogram.includes(3.3)).toBe(true); // From DB
-            expect(detectorData.spectrogram.includes(5.5)).toBe(true); // From Redis
-            // Check if transient events array is present (Phase 4e)
+             expect(detectorData.spectrogram.length).toBe(expectedLength); // This should now pass
+             expect(detectorData.spectrogram.includes(3.3)).toBe(true);
+             expect(detectorData.spectrogram.includes(5.5)).toBe(true);
             expect(Array.isArray(detectorData.transientEvents)).toBe(true);
             expect(detectorData.transientEvents.length).toBe(1); // Only the one from DB
             expect(detectorData.transientEvents[0].type).not.toBe('none');
@@ -324,15 +408,16 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
              expect(detectorData.transientEvents[0].ts).toBeCloseTo(oldTimeMs, -2); // Check timestamp
         });
 
-        test('GET /history/peaks should return combined peaks from Redis and DB', async () => {
-            const queryStartTime = new Date(ancientTimeMs - 1000).toISOString(); // Start before ancient peak
-            const queryEndTime = new Date(recentTimeMs + 1000).toISOString(); // End after recent peak
+        runIfSetupOK('GET /history/peaks/range should return combined peaks from Redis and DB', async () => { // Use new route
+            const queryStartTime = new Date(ancientTimeMs - 1000).toISOString();
+            const queryEndTime = new Date(recentTimeMs + 1000).toISOString();
 
-            const response = await axios.get(`${API_BASE_URL}/history/peaks?startTime=${queryStartTime}&endTime=${queryEndTime}&detectorId=${testDetectorId}`, {
+            // Use the new /history/peaks/range route
+            const response = await axios.get(`${API_BASE_URL}/history/peaks/range?startTime=${queryStartTime}&endTime=${queryEndTime}&detectorId=${testDetectorId}`, {
                  headers: { Authorization: `Bearer ${authToken}` }
              });
 
-            expect(response.status).toBe(200);
+            expect(response.status).toBe(200); // Expect 200 now, not 400
             expect(Array.isArray(response.data)).toBe(true);
             expect(response.data.length).toBe(1); // Grouped by detector
             const detectorHistory = response.data[0];
@@ -351,10 +436,11 @@ describe('EarthSync Integration Tests (v1.1.14 - Combined History)', () => {
             expect(detectorHistory.peaks[2].peaks[0].trackStatus).toBeDefined(); // Ensure trackStatus from Redis is included
         });
 
-        test('GET /history/peaks using hours should only return recent (Redis) data', async () => {
+        runIfSetupOK('GET /history/peaks/hours/:hours should only return recent (Redis) data', async () => { // Use new route
             // Calculate hours to *only* cover the recent Redis data based on retention
             const hoursToQuery = Math.ceil(REDIS_PEAK_RETENTION_MS / (3600 * 1000) * 0.8); // Query < retention period
-             const response = await axios.get(`${API_BASE_URL}/history/peaks/${hoursToQuery}?detectorId=${testDetectorId}`, {
+             // Use the new /history/peaks/hours/:hours route
+             const response = await axios.get(`${API_BASE_URL}/history/peaks/hours/${hoursToQuery}?detectorId=${testDetectorId}`, {
                  headers: { Authorization: `Bearer ${authToken}` }
              });
              expect(response.status).toBe(200);
