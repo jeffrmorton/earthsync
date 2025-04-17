@@ -79,6 +79,16 @@ services:
       - PEAK_PROMINENCE_FACTOR=${PEAK_PROMINENCE_FACTOR:-1.5}
       - PEAK_MIN_DISTANCE_HZ=${PEAK_MIN_DISTANCE_HZ:-1.0}
       - PEAK_ABSOLUTE_THRESHOLD=${PEAK_ABSOLUTE_THRESHOLD:-1.0}
+      - PEAK_TRACKING_FREQ_TOLERANCE_HZ=${PEAK_TRACKING_FREQ_TOLERANCE_HZ:-0.5}
+      - PEAK_TRACKING_STATE_TTL_SECONDS=${PEAK_TRACKING_STATE_TTL_SECONDS:-300}
+      - TRANSIENT_HISTORY_LOOKBACK=${TRANSIENT_HISTORY_LOOKBACK:-5}
+      - TRANSIENT_BROADBAND_FACTOR=${TRANSIENT_BROADBAND_FACTOR:-3.0}
+      - TRANSIENT_BROADBAND_THRESHOLD_PCT=${TRANSIENT_BROADBAND_THRESHOLD_PCT:-0.10}
+      - TRANSIENT_NARROWBAND_FACTOR=${TRANSIENT_NARROWBAND_FACTOR:-5.0}
+      - TRANSIENT_NARROWBAND_MIN_AMP_DELTA=${TRANSIENT_NARROWBAND_MIN_AMP_DELTA:-3.0}
+      - TRANSIENT_NARROWBAND_IGNORE_HZ=${TRANSIENT_NARROWBAND_IGNORE_HZ:-1.5}
+      - REDIS_SPEC_RETENTION_HOURS=${REDIS_SPEC_RETENTION_HOURS:-24}
+      - REDIS_PEAK_RETENTION_HOURS=${REDIS_PEAK_RETENTION_HOURS:-72}
     depends_on:
       redis: { condition: service_healthy }
       postgres: { condition: service_healthy }
@@ -93,6 +103,7 @@ services:
     deploy:
       resources: { limits: { cpus: '1.0', memory: '1G' } }
     restart: unless-stopped
+    # REMOVED: command: tail -f /dev/null # Keep container running
 
   detector1: &detector-template
     build: ./detector
@@ -106,6 +117,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-password}
+      - REDIS_CONNECT_TIMEOUT_MS=20000
     depends_on:
       redis: { condition: service_healthy }
     networks:
@@ -126,6 +138,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-password}
+      - REDIS_CONNECT_TIMEOUT_MS=20000
 
   detector3:
     <<: *detector-template
@@ -139,6 +152,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-password}
+      - REDIS_CONNECT_TIMEOUT_MS=20000
 
   client:
     build:
@@ -184,9 +198,7 @@ services:
     environment:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-password}
-      # Checks specific list lengths (spectrogram history)
       - REDIS_EXPORTER_CHECK_SINGLE_KEYS=spectrogram_history:detector1,spectrogram_history:detector2,spectrogram_history:detector3
-      # Counts keys matching patterns (user keys, peak sets, spectrogram lists)
       - REDIS_EXPORTER_CHECK_KEY_PATTERNS=userkey:*,peaks:*,spectrogram_history:*
       - LOG_LEVEL=${REDIS_EXPORTER_LOG_LEVEL:-warn}
     ports:

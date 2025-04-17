@@ -211,7 +211,8 @@ app.get('/history/:hours?', apiLimiter, authenticateToken, historyValidationRule
   const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(hours, startTime, endTime);
   const startTimeISO = new Date(startTimeMs).toISOString();
   const endTimeISO = new Date(endTimeMs).toISOString();
-  const cacheKey = `history_spec_transient:${rangeIdentifier}:${detectorId || 'all'}`; // Updated cache key
+  // Phase 4e: Update cache key to reflect inclusion of transient events
+  const cacheKey = `history_spec_transient:${rangeIdentifier}:${detectorId || 'all'}`;
 
   try {
     const cached = await streamRedisClient.get(cacheKey);
@@ -249,6 +250,7 @@ app.get('/history/:hours?', apiLimiter, authenticateToken, historyValidationRule
         const dbEndTimeISO = new Date(redisBoundaryMs).toISOString();
         logger.debug(`Querying DB for spectrograms between ${dbStartTimeISO} and ${dbEndTimeISO}`);
         try {
+             // Phase 4d: Select transient_details as well
              let queryText = `
                 SELECT detector_id, timestamp, location_lat, location_lon, spectrogram_data, transient_detected, transient_details
                 FROM historical_spectrograms
@@ -261,6 +263,7 @@ app.get('/history/:hours?', apiLimiter, authenticateToken, historyValidationRule
                   queryText += ` ORDER BY detector_id ASC, timestamp ASC`;
              }
             const dbRes = await db.query(queryText, queryParams);
+            // Phase 4d: Map DB results including transient_details into transientInfo
             dbResults = dbRes.rows.map(row => ({
                 detectorId: row.detector_id,
                 timestamp: row.timestamp.toISOString(),
@@ -285,13 +288,13 @@ app.get('/history/:hours?', apiLimiter, authenticateToken, historyValidationRule
     const groupedData = combinedResults.reduce((acc, r) => {
         if (!r.detectorId || !r.spectrogram || !r.location || !Array.isArray(r.spectrogram)) return acc;
         const detId = r.detectorId;
-        acc[detId] = acc[detId] || { detectorId: detId, location: r.location, spectrograms: [], transientEvents: [] };
+        acc[detId] = acc[detId] || { detectorId: detId, location: r.location, spectrograms: [], transientEvents: [] }; // Initialize transientEvents array
 
         if (Array.isArray(r.spectrogram) && Array.isArray(r.spectrogram[0])) {
             r.spectrogram.forEach(specRow => { if(Array.isArray(specRow)) { acc[detId].spectrograms.push(...specRow); } });
         }
 
-        // Collect transient events per detector
+        // Phase 4d: Collect transient events per detector
         if (r.transientInfo && r.transientInfo.type !== 'none') {
             acc[detId].transientEvents.push({
                 ts: new Date(r.timestamp).getTime(),
@@ -306,11 +309,11 @@ app.get('/history/:hours?', apiLimiter, authenticateToken, historyValidationRule
     const finalResult = Object.values(groupedData).map(group => ({
         detectorId: group.detectorId,
         location: group.location,
-        spectrogram: group.spectrograms,
+        spectrogram: group.spectrograms, // Concatenated values
         transientEvents: group.transientEvents // Include the collected events
     }));
 
-    // Update caching
+    // Update caching if needed to include transients
     if (finalResult.length > 0) {
         await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult));
         logger.info('Cached combined spec+transient historical data', { cacheKey, totalDetectors: finalResult.length });
@@ -322,6 +325,7 @@ app.get('/history/:hours?', apiLimiter, authenticateToken, historyValidationRule
 
 
 // Historical Peak Data - Updated for Phase 3b (DB Query)
+// No changes needed here for Phase 4e unless we decide to store transient info with peaks too
 app.get('/history/peaks/:hours?', apiLimiter, authenticateToken, historyValidationRules, validateRequest, async (req, res, next) => {
     const hours = req.params.hours ? parseInt(req.params.hours, 10) : null;
     const { startTime, endTime, detectorId } = req.query;
@@ -354,6 +358,7 @@ app.get('/history/peaks/:hours?', apiLimiter, authenticateToken, historyValidati
                             peaksWithTs.push({
                                 ts: parseInt(peakStringsWithScores[i+1], 10),
                                 peaks: peakData
+                                // transientDetected: Needs separate lookup if required here
                             });
                          } catch {}
                     }
@@ -509,17 +514,19 @@ async function processStreamMessages() {
                                 ...parsedMessage,
                                 spectrogram: downsampledBatch,
                                 detectedPeaks: allDetectedPeaksForWs,
-                                transientInfo: transientResult
+                                transientInfo: transientResult // Include full transient info
                             };
                             const messageString = JSON.stringify(dataToProcess);
 
                             const historyKey = `spectrogram_history:${parsedMessage.detectorId}`;
+                            // Store data including transientInfo
                             historyPipeline.lpush(historyKey, messageString);
                             historyPipeline.ltrim(historyKey, 0, 999);
                             logger.debug("Adding processed data to history list", { key: historyKey, numRows: downsampledBatch.length, transientType: transientResult.type });
 
                             await historyPipeline.exec();
 
+                            // Broadcast data (including transientInfo)
                             let sentCount = 0;
                             logger.debug(`Broadcasting message ${messageId} to ${wss.clients.size} potential clients`, { detectorId: parsedMessage.detectorId, peakCount: allDetectedPeaksForWs.length, transientType: transientResult.type });
                             for (const ws of wss.clients) {
