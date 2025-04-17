@@ -93,6 +93,7 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
             console.log('Cleaning up previous test data...');
             const userKeys = await redis.keys(`${testUser}`);
             if (userKeys.length > 0) await redis.del(userKeys);
+             // Clear specific detector history/peaks/state
             const dataKeys = await streamRedis.keys(`*${testDetectorId}*`);
             if (dataKeys.length > 0) await streamRedis.del(dataKeys);
             const trackStateKey = `track_state:${testDetectorId}`; // Key used by trackPeaks
@@ -117,6 +118,7 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
             // Attempt cleanup even on failure
             if (dbClient) dbClient.release();
             // Don't end pool/quit redis here, let afterAll handle it based on status
+            // throw error to make Jest aware setup failed
             throw new Error(setupError);
         }
     });
@@ -212,8 +214,6 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
          expect(streamData.detectorId).toBe(ingestDetectorId);
          expect(streamData.spectrogram.length).toBe(2);
          expect(streamData.spectrogram[0].length).toBe(RAW_FREQUENCY_POINTS);
-         // Clean up only the processed message if needed, or rely on test isolation
-         // await streamRedis.xdel('spectrogram_stream', targetMessage[0]);
      });
 
      runIfSetupOK('WebSocket receives processed data with peaks and transient info', async () => {
@@ -302,7 +302,9 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
          expect(Array.isArray(decryptedData.detectedPeaks)).toBe(true);
          expect(decryptedData.detectedPeaks.length).toBeGreaterThanOrEqual(1);
          const detectedPeak = decryptedData.detectedPeaks.find(p => Math.abs(p.freq - peakFreq) < 1.0);
-         expect(detectedPeak).withContext(`Expected peak near ${peakFreq.toFixed(2)}Hz not found in ${JSON.stringify(decryptedData.detectedPeaks)}`).toBeDefined();
+         // Fix: Remove .withContext()
+         expect(detectedPeak).toBeDefined();
+         if (!detectedPeak) { console.error(`Expected peak near ${peakFreq.toFixed(2)}Hz not found in ${JSON.stringify(decryptedData.detectedPeaks)}`); }
          expect(detectedPeak.amp).toBeCloseTo(20.0, 0);
          expect(detectedPeak.qFactor).toBeGreaterThan(0);
          expect(detectedPeak.trackStatus).toBeDefined(); // Check trackStatus exists
@@ -320,7 +322,6 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
          const storedMainPeak = storedPeakDataArray.find(p => Math.abs(p.freq - peakFreq) < 1.0);
          expect(storedMainPeak).toBeDefined();
 
-         // ws.close(1000, 'Test complete'); // Closed within promise handler now
          await streamRedis.del(peakKeyWs); // Clean up specific key
      });
 
@@ -362,23 +363,11 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
             await streamRedis.lpush(specHistKey, JSON.stringify(recentSpecData));
             await streamRedis.zadd(peakHistKey, recentTimeMs, JSON.stringify(recentPeakData));
             // Seed old data into DB
-            await dbPool.query(
-                `INSERT INTO historical_spectrograms (detector_id, timestamp, location_lat, location_lon, spectrogram_data, transient_detected, transient_details) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                [oldSpecData.detector_id, oldSpecData.timestamp, oldSpecData.location_lat, oldSpecData.location_lon, JSON.stringify(oldSpecData.spectrogram_data), oldSpecData.transient_detected, oldSpecData.transient_details]
-            );
-            await dbPool.query(
-                `INSERT INTO historical_peaks (detector_id, "timestamp", peak_data) VALUES ($1, $2, $3)`,
-                [testDetectorId, new Date(oldTimeMs), JSON.stringify(oldPeakData)]
-            );
-            await dbPool.query( // Add ancient peak data too
-                `INSERT INTO historical_peaks (detector_id, "timestamp", peak_data) VALUES ($1, $2, $3)`,
-                [testDetectorId, new Date(ancientTimeMs), JSON.stringify(ancientPeakData)]
-            );
+            await dbPool.query( `INSERT INTO historical_spectrograms (detector_id, timestamp, location_lat, location_lon, spectrogram_data, transient_detected, transient_details) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [oldSpecData.detector_id, oldSpecData.timestamp, oldSpecData.location_lat, oldSpecData.location_lon, JSON.stringify(oldSpecData.spectrogram_data), oldSpecData.transient_detected, oldSpecData.transient_details] );
+            await dbPool.query( `INSERT INTO historical_peaks (detector_id, "timestamp", peak_data) VALUES ($1, $2, $3)`, [testDetectorId, new Date(oldTimeMs), JSON.stringify(oldPeakData)] );
+            await dbPool.query( `INSERT INTO historical_peaks (detector_id, "timestamp", peak_data) VALUES ($1, $2, $3)`, [testDetectorId, new Date(ancientTimeMs), JSON.stringify(ancientPeakData)] );
             console.log("History data seeded.");
-            if (!authToken) {
-                const response = await axios.post(`${API_BASE_URL}/login`, { username: testUser, password: testPassword });
-                authToken = response.data.token;
-            }
+            if (!authToken) { const response = await axios.post(`${API_BASE_URL}/login`, { username: testUser, password: testPassword }); authToken = response.data.token; }
             expect(authToken).toBeDefined();
         });
 
@@ -398,8 +387,8 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
             expect(detectorData.detectorId).toBe(testDetectorId);
             // Expect combined spectrogram data (1 DB row + 1 Redis row -> 2 rows * length)
             const expectedLength = EXPECTED_DOWNSAMPLED_LENGTH * 2;
-             expect(detectorData.spectrogram.length).toBe(expectedLength); // This should now pass
-             expect(detectorData.spectrogram.includes(3.3)).toBe(true);
+             expect(detectorData.spectrogram.length).toBe(expectedLength); // Check length
+             expect(detectorData.spectrogram.includes(3.3)).toBe(true); // Check content
              expect(detectorData.spectrogram.includes(5.5)).toBe(true);
             expect(Array.isArray(detectorData.transientEvents)).toBe(true);
             expect(detectorData.transientEvents.length).toBe(1); // Only the one from DB
@@ -417,16 +406,15 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
                  headers: { Authorization: `Bearer ${authToken}` }
              });
 
-            expect(response.status).toBe(200); // Expect 200 now, not 400
+            expect(response.status).toBe(200); // Expect 200 now
             expect(Array.isArray(response.data)).toBe(true);
             expect(response.data.length).toBe(1); // Grouped by detector
             const detectorHistory = response.data[0];
             expect(detectorHistory.detectorId).toBe(testDetectorId);
             expect(Array.isArray(detectorHistory.peaks)).toBe(true);
-            // Expecting 3 entries: ancient (DB), old (DB), recent (Redis)
-            expect(detectorHistory.peaks.length).toBe(3);
+             // Expecting 3 entries: ancient (DB), old (DB), recent (Redis)
+             expect(detectorHistory.peaks.length).toBe(3); // Check length
 
-            // Check timestamps are close and data matches (approx)
             expect(detectorHistory.peaks[0].ts).toBeCloseTo(ancientTimeMs, -2);
             expect(detectorHistory.peaks[0].peaks[0].freq).toBe(ancientPeakData[0].freq);
             expect(detectorHistory.peaks[1].ts).toBeCloseTo(oldTimeMs, -2);
@@ -437,8 +425,7 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
         });
 
         runIfSetupOK('GET /history/peaks/hours/:hours should only return recent (Redis) data', async () => { // Use new route
-            // Calculate hours to *only* cover the recent Redis data based on retention
-            const hoursToQuery = Math.ceil(REDIS_PEAK_RETENTION_MS / (3600 * 1000) * 0.8); // Query < retention period
+            const hoursToQuery = Math.ceil(REDIS_PEAK_RETENTION_MS / (3600 * 1000) * 0.8);
              // Use the new /history/peaks/hours/:hours route
              const response = await axios.get(`${API_BASE_URL}/history/peaks/hours/${hoursToQuery}?detectorId=${testDetectorId}`, {
                  headers: { Authorization: `Bearer ${authToken}` }
@@ -447,8 +434,7 @@ describe('EarthSync Integration Tests (v1.1.15 - History Routes)', () => {
              expect(response.data.length).toBe(1);
              const detectorHistory = response.data[0];
              expect(detectorHistory.detectorId).toBe(testDetectorId);
-             // Should only contain the recent peak from Redis
-             expect(detectorHistory.peaks.length).toBe(1);
+             expect(detectorHistory.peaks.length).toBe(1); // Only recent Redis peak
              expect(detectorHistory.peaks[0].ts).toBeCloseTo(recentTimeMs, -2);
              expect(detectorHistory.peaks[0].peaks[0].freq).toBe(recentPeakData[0].freq);
         });

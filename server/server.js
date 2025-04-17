@@ -185,6 +185,7 @@ const historyRangeValidationRules = [
         if (startTime && endTime) {
             if (new Date(endTime) < new Date(startTime)) { throw new Error('endTime must be after startTime.'); }
         } else {
+             // This case should be caught by individual validators, but added for safety
              throw new Error('Both startTime and endTime query parameters are required for range query.');
         }
         return true;
@@ -203,7 +204,7 @@ function getQueryTimeRange(hours, startTimeStr, endTimeStr) {
         endTimeMs = Date.now();
         startTimeMs = endTimeMs - hours * 60 * 60 * 1000;
         rangeIdentifier = `h${hours}`;
-    } else {
+    } else { // Fallback if neither is provided
         endTimeMs = Date.now();
         startTimeMs = endTimeMs - 1 * 60 * 60 * 1000;
         rangeIdentifier = 'h1_default';
@@ -434,6 +435,7 @@ app.get('/history/peaks/range', apiLimiter, authenticateToken, historyRangeValid
         redisPeakResults.forEach(d => { if(combinedResultsMap[d.detectorId]) {combinedResultsMap[d.detectorId].peaks.push(...d.peaks);} else {combinedResultsMap[d.detectorId]={detectorId:d.detectorId, peaks:[...d.peaks]};} });
         Object.values(combinedResultsMap).forEach(d => d.peaks.sort((a, b) => a.ts - b.ts));
         const finalResult = Object.values(combinedResultsMap);
+        logger.debug(`Final grouped peak result (range): ${JSON.stringify(finalResult).substring(0, 500)}...`);
         if (finalResult.length > 0) { await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult)); logger.info('Cached combined peak historical data (range)', { cacheKey }); }
         res.json(finalResult);
     } catch (err) { logger.error('Peak history fetch error (range)', { username, detectorId, startTime, endTime, error: err.message }); next(err); }
