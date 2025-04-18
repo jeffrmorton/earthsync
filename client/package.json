@@ -1,6 +1,6 @@
 {
   "name": "earthsync-client",
-  "version": "1.1.8",
+  "version": "1.1.10",
   "private": true,
   "dependencies": {
     "@emotion/react": "^11.13.0",
@@ -22,8 +22,12 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "lint": "eslint \"src/**/*.{js,jsx}\"",
+    "lint:fix": "eslint \"src/**/*.{js,jsx}\" --fix",
+    "format": "prettier --write \"src/**/*.{js,jsx,css,json}\" \"public/**/*.json\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,css,json}\" \"public/**/*.json\"",
+    "eject": "react-scripts eject",
+    "test": "react-scripts test"
   },
   "eslintConfig": {
     "extends": [
@@ -42,5 +46,12 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "eslint-plugin-jsx-a11y": "^6.9.0",
+    "eslint-plugin-react": "^7.35.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "prettier": "^3.3.3"
   }
 }

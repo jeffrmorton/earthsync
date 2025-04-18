@@ -1,0 +1,126 @@
+// server/config/constants.js
+/**
+ * Centralized constants for the EarthSync server.
+ */
+
+// Environment variables with defaults
+const PORT = process.env.PORT || 3000;
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const JWT_SECRET = process.env.JWT_SECRET;
+const CLEANUP_INTERVAL_MS = parseInt(process.env.CLEANUP_INTERVAL_MS, 10) || 3600000; // 1 hour
+const DOWNSAMPLE_FACTOR = parseInt(process.env.DOWNSAMPLE_FACTOR, 10) || 5;
+const REDIS_HOST = process.env.REDIS_HOST;
+const REDIS_PORT = parseInt(process.env.REDIS_PORT, 10);
+const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
+const DB_HOST = process.env.DB_HOST;
+const DB_PORT = parseInt(process.env.DB_PORT, 10);
+const DB_USER = process.env.DB_USER;
+const DB_PASSWORD = process.env.DB_PASSWORD;
+const DB_NAME = process.env.DB_NAME;
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || 'http://localhost:3001').split(',');
+const API_INGEST_KEY = process.env.API_INGEST_KEY;
+const REDIS_SPEC_RETENTION_HOURS = parseInt(process.env.REDIS_SPEC_RETENTION_HOURS, 10) || 24;
+const REDIS_PEAK_RETENTION_HOURS = parseInt(process.env.REDIS_PEAK_RETENTION_HOURS, 10) || 72;
+const REDIS_SPEC_RETENTION_MS = REDIS_SPEC_RETENTION_HOURS * 60 * 60 * 1000;
+const REDIS_PEAK_RETENTION_MS = REDIS_PEAK_RETENTION_HOURS * 60 * 60 * 1000;
+
+// Application constants
+const ENCRYPTION_KEY_TTL_SECONDS = 3600; // 1 hour
+const BCRYPT_SALT_ROUNDS = 10;
+const RAW_FREQUENCY_POINTS = 5501;
+const MAX_SPECTROGRAM_HISTORY_LENGTH = 1000; // Max items per detector list in Redis
+
+// Peak Detection/Processing Parameters (Defaults, may be overridden by env vars in processingUtils)
+const DEFAULT_PEAK_SMOOTHING_WINDOW = parseInt(process.env.PEAK_SMOOTHING_WINDOW, 10) || 5;
+const DEFAULT_PEAK_PROMINENCE_FACTOR = parseFloat(process.env.PEAK_PROMINENCE_FACTOR || 1.5);
+const DEFAULT_PEAK_MIN_DISTANCE_HZ = parseFloat(process.env.PEAK_MIN_DISTANCE_HZ || 1.0);
+const DEFAULT_PEAK_ABSOLUTE_THRESHOLD = parseFloat(process.env.PEAK_ABSOLUTE_THRESHOLD || 1.0);
+const DEFAULT_PEAK_TRACKING_FREQ_TOLERANCE_HZ = parseFloat(
+  process.env.PEAK_TRACKING_FREQ_TOLERANCE_HZ || DEFAULT_PEAK_MIN_DISTANCE_HZ / 2 || 0.5
+);
+// PEAK_TRACKING_STATE_TTL_SECONDS is deprecated (DB persistence)
+const DEFAULT_TRANSIENT_HISTORY_LOOKBACK =
+  parseInt(process.env.TRANSIENT_HISTORY_LOOKBACK, 10) || 5;
+const DEFAULT_TRANSIENT_BROADBAND_FACTOR = parseFloat(
+  process.env.TRANSIENT_BROADBAND_FACTOR || 3.0
+);
+const DEFAULT_TRANSIENT_BROADBAND_THRESHOLD_PCT = parseFloat(
+  process.env.TRANSIENT_BROADBAND_THRESHOLD_PCT || 0.1
+);
+const DEFAULT_TRANSIENT_NARROWBAND_FACTOR = parseFloat(
+  process.env.TRANSIENT_NARROWBAND_FACTOR || 5.0
+);
+const DEFAULT_TRANSIENT_NARROWBAND_MIN_AMP_DELTA = parseFloat(
+  process.env.TRANSIENT_NARROWBAND_MIN_AMP_DELTA || 3.0
+);
+const DEFAULT_TRANSIENT_NARROWBAND_IGNORE_HZ = parseFloat(
+  process.env.TRANSIENT_NARROWBAND_IGNORE_HZ || 1.5
+);
+const SCHUMANN_FREQUENCIES = [7.83, 14.3, 20.8, 27.3, 33.8, 39.0, 45.0, 51.0]; // Keep fundamental constants too
+
+// Redis Keys / Prefixes / Streams
+const REDIS_USER_KEY_PREFIX = 'userkey:';
+const REDIS_SPECTROGRAM_STREAM_KEY = 'spectrogram_stream';
+const REDIS_STREAM_GROUP_NAME = 'earthsync_group';
+const REDIS_SPEC_HISTORY_PREFIX = 'spectrogram_history:';
+const REDIS_PEAK_HISTORY_PREFIX = 'peaks:';
+const REDIS_PEAK_TRACKING_STATE_PREFIX = 'track_state:'; // Used internally by trackPeaks DB functions now, maybe rename if only DB uses it
+const REDIS_HISTORY_CACHE_PREFIX = 'history_cache:'; // Prefix for API query caches
+
+// Status Strings
+const STATUS_OK = 'OK';
+const STATUS_ERROR = 'Error';
+const HEALTH_OK = 'OK';
+const HEALTH_ERROR = 'Error';
+
+// Export constants
+module.exports = {
+  PORT,
+  LOG_LEVEL,
+  NODE_ENV,
+  JWT_SECRET,
+  CLEANUP_INTERVAL_MS,
+  DOWNSAMPLE_FACTOR,
+  REDIS_HOST,
+  REDIS_PORT,
+  REDIS_PASSWORD,
+  DB_HOST,
+  DB_PORT,
+  DB_USER,
+  DB_PASSWORD,
+  DB_NAME,
+  ALLOWED_ORIGINS,
+  API_INGEST_KEY,
+  REDIS_SPEC_RETENTION_HOURS,
+  REDIS_PEAK_RETENTION_HOURS,
+  REDIS_SPEC_RETENTION_MS,
+  REDIS_PEAK_RETENTION_MS,
+  ENCRYPTION_KEY_TTL_SECONDS,
+  BCRYPT_SALT_ROUNDS,
+  RAW_FREQUENCY_POINTS,
+  MAX_SPECTROGRAM_HISTORY_LENGTH,
+  DEFAULT_PEAK_SMOOTHING_WINDOW,
+  DEFAULT_PEAK_PROMINENCE_FACTOR,
+  DEFAULT_PEAK_MIN_DISTANCE_HZ,
+  DEFAULT_PEAK_ABSOLUTE_THRESHOLD,
+  DEFAULT_PEAK_TRACKING_FREQ_TOLERANCE_HZ,
+  DEFAULT_TRANSIENT_HISTORY_LOOKBACK,
+  DEFAULT_TRANSIENT_BROADBAND_FACTOR,
+  DEFAULT_TRANSIENT_BROADBAND_THRESHOLD_PCT,
+  DEFAULT_TRANSIENT_NARROWBAND_FACTOR,
+  DEFAULT_TRANSIENT_NARROWBAND_MIN_AMP_DELTA,
+  DEFAULT_TRANSIENT_NARROWBAND_IGNORE_HZ,
+  SCHUMANN_FREQUENCIES,
+  REDIS_USER_KEY_PREFIX, // Note: Used directly by Redis client config
+  REDIS_SPECTROGRAM_STREAM_KEY,
+  REDIS_STREAM_GROUP_NAME,
+  REDIS_SPEC_HISTORY_PREFIX,
+  REDIS_PEAK_HISTORY_PREFIX,
+  REDIS_PEAK_TRACKING_STATE_PREFIX,
+  REDIS_HISTORY_CACHE_PREFIX,
+  STATUS_OK,
+  STATUS_ERROR,
+  HEALTH_OK,
+  HEALTH_ERROR,
+};
