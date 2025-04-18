@@ -1,10 +1,10 @@
 // client/src/components/ControlsDrawer.js
 /**
  * Component responsible for rendering the controls drawer, including mode switching,
- * plot controls, peak/transient info, and the detector globe.
- * v1.1.28 - Use Centralized Constants.
+ * plot controls, filtered peak/transient info, and the detector globe.
+ * v1.1.28 - UI/UX improvements: Slider feedback, Peak list format/scrolling, Spacing.
  */
-import React, { useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import PropTypes from 'prop-types';
 import Globe from 'react-globe.gl';
 import {
@@ -28,6 +28,7 @@ import {
   Tooltip,
   Button,
   ButtonGroup,
+  Stack,
 } from '@mui/material';
 import {
   BarChart as BarChartIcon,
@@ -35,110 +36,108 @@ import {
   History as HistoryIcon,
   Insights as InsightsIcon,
   WarningAmber as WarningAmberIcon,
-  ViewInAr as ViewInArIcon, // Icon for 3D Surface
-  Map as MapIcon, // Icon for 2D Heatmap
+  ViewInAr as ViewInArIcon,
+  Map as MapIcon,
 } from '@mui/icons-material';
-// Import relevant constants
-import { PLOT_COLOR_SCALES } from '../constants';
+import { PLOT_COLOR_SCALES, DEFAULT_TIME_STEPS, DEFAULT_HISTORICAL_HOURS } from '../constants';
 
 // Extracted Drawer Component
 const ControlsDrawer = React.memo(
   ({
-    // Props for Drawer state and appearance
-    drawerWidth, // Use constant passed from parent
+    drawerWidth,
     appBarHeight,
     drawerOpen,
     darkMode,
-    theme, // Pass theme for consistent styling
-
-    // Props for Data Mode
+    theme,
     historicalMode,
     handleModeChange,
     onLogout,
-
-    // Props for Controls
     selectedDetector,
     handleDetectorChange,
     detectorOptions,
-    timeSteps, // Used to display current slider value
-    debouncedSetTimeSteps, // Function to call on slider change
+    timeSteps: actualTimeSteps,
+    debouncedSetTimeSteps,
     colorScale,
-    setColorScale, // Use stable setter
+    setColorScale,
     normalize,
-    setNormalize, // Use stable setter
-    historicalHours, // Used to display current slider value
-    debouncedSetHistoricalHours, // Function to call on slider change
+    setNormalize,
+    historicalHours: actualHistoricalHours,
+    debouncedSetHistoricalHours,
     isLoadingData,
     isTransitioning,
-
-    // Props for Peak/Transient Info Display
-    currentPeakInfo, // Formatted string or null
-    historicalTransientEvents, // Array of transient events
-
-    // Props for Globe
-    globePoints, // Array of points for the globe
+    schumannPeaks, // Renamed prop - receives the filtered array
+    historicalTransientEvents,
+    globePoints,
     handleGlobePointClick,
     handleGlobePointHover,
-
-    // Props for Plot Type Toggle
     plotType,
-    setPlotType, // Use stable setter
+    setPlotType,
   }) => {
-    const globeRef = useRef(null); // Ref for the Globe component instance
+    const globeRef = useRef(null);
 
-    // Callback for internal slider changes BEFORE debouncing
-    // This updates the displayed value immediately for better UX
+    const [displayTimeSeconds, setDisplayTimeSeconds] = useState(
+      typeof actualTimeSteps === 'number' ? actualTimeSteps * 5 : DEFAULT_TIME_STEPS * 5
+    );
+    const [displayHistoricalHours, setDisplayHistoricalHours] = useState(
+      typeof actualHistoricalHours === 'number' ? actualHistoricalHours : DEFAULT_HISTORICAL_HOURS
+    );
+
+    useEffect(() => {
+      setDisplayTimeSeconds(actualTimeSteps * 5);
+    }, [actualTimeSteps]);
+
+    useEffect(() => {
+      setDisplayHistoricalHours(actualHistoricalHours);
+    }, [actualHistoricalHours]);
+
     const handleTimeStepsSliderChange = (event, newValue) => {
-      // Call the debounced function to update the actual state after a delay
+      setDisplayTimeSeconds(newValue);
       debouncedSetTimeSteps(newValue);
     };
     const handleHistoricalHoursSliderChange = (event, newValue) => {
+      setDisplayHistoricalHours(newValue);
       debouncedSetHistoricalHours(newValue);
     };
 
     return (
       <Drawer
-        variant="persistent" // Drawer stays visible when open
+        variant="persistent"
         anchor="left"
         open={drawerOpen}
         sx={{
-          width: drawerWidth, // Use width from props/constants
-          flexShrink: 0, // Prevent drawer from shrinking when content grows
+          width: drawerWidth,
+          flexShrink: 0,
           '& .MuiDrawer-paper': {
             width: drawerWidth,
             boxSizing: 'border-box',
-            overflowX: 'hidden', // Prevent horizontal scrollbar
-            mt: `${appBarHeight}px`, // Position below AppBar
-            height: `calc(100% - ${appBarHeight}px)`, // Fill remaining height
-            // Smooth transition for drawer width when opening/closing
+            overflow: 'hidden', // Prevent drawer paper itself from scrolling
+            mt: `${appBarHeight}px`,
+            height: `calc(100% - ${appBarHeight}px)`,
             transition: theme.transitions.create('width', {
               easing: theme.transitions.easing.sharp,
               duration: drawerOpen
                 ? theme.transitions.duration.enteringScreen
                 : theme.transitions.duration.leavingScreen,
             }),
-            display: 'flex',
-            flexDirection: 'column',
-            borderRight: `1px solid ${theme.palette.divider}`, // Subtle border
+            display: 'flex', // Use flexbox for vertical layout
+            flexDirection: 'column', // Stack sections vertically
+            borderRight: `1px solid ${theme.palette.divider}`,
           },
         }}
         aria-label="Controls Drawer"
       >
-        {/* --- Scrollable Area for Controls --- */}
-        <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 2 }}>
-          {' '}
-          {/* Add padding */}
-          {/* Mode Selection List */}
-          <List dense>
-            {' '}
-            {/* Use dense list for slightly smaller items */}
+        {/* Scrollable Area for Controls (Excluding Globe) */}
+        {/* Make this box the primary scroll container */}
+        <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 1.5 }}>
+          <List dense sx={{ py: 0 }}>
             <ListItem disablePadding>
               <ListItemButton
                 onClick={() => handleModeChange(false)}
                 selected={!historicalMode}
                 aria-current={!historicalMode ? 'page' : 'false'}
+                sx={{ py: 0.75 }}
               >
-                <ListItemIcon>
+                <ListItemIcon sx={{ minWidth: 36 }}>
                   <BarChartIcon />
                 </ListItemIcon>
                 <ListItemText primary="Real-time Data" />
@@ -149,254 +148,256 @@ const ControlsDrawer = React.memo(
                 onClick={() => handleModeChange(true)}
                 selected={historicalMode}
                 aria-current={historicalMode ? 'page' : 'false'}
+                sx={{ py: 0.75 }}
               >
-                <ListItemIcon>
+                <ListItemIcon sx={{ minWidth: 36 }}>
                   <HistoryIcon />
                 </ListItemIcon>
                 <ListItemText primary="Historical Data" />
               </ListItemButton>
             </ListItem>
             <ListItem disablePadding>
-              <ListItemButton onClick={onLogout}>
-                <ListItemIcon>
+              <ListItemButton onClick={onLogout} sx={{ py: 0.75 }}>
+                <ListItemIcon sx={{ minWidth: 36 }}>
                   <LogoutIcon />
                 </ListItemIcon>
                 <ListItemText primary="Logout" />
               </ListItemButton>
             </ListItem>
           </List>
-          <Divider sx={{ my: 2 }} />
-          {/* --- Spectrogram View Controls Section --- */}
-          <Typography variant="overline" display="block" gutterBottom sx={{ px: 1 }}>
-            {' '}
-            {/* Use overline style */}
-            Spectrogram View
-          </Typography>
-          {/* Plot Type Toggle */}
-          <FormControl fullWidth sx={{ mb: 2, px: 1 }}>
-            <FormLabel id="plot-type-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
-              Plot Type
-            </FormLabel>
-            <ButtonGroup
-              variant="outlined"
-              aria-labelledby="plot-type-label"
-              fullWidth
-              size="small"
-            >
-              <Button
-                onClick={() => setPlotType('3d')}
-                variant={plotType === '3d' ? 'contained' : 'outlined'}
-                startIcon={<ViewInArIcon />}
-                aria-pressed={plotType === '3d'}
-              >
-                3D Surface
-              </Button>
-              <Button
-                onClick={() => setPlotType('2d')}
-                variant={plotType === '2d' ? 'contained' : 'outlined'}
-                startIcon={<MapIcon />}
-                aria-pressed={plotType === '2d'}
-              >
-                2D Heatmap
-              </Button>
-            </ButtonGroup>
-          </FormControl>
-          {/* Detector Selection */}
-          <FormControl fullWidth sx={{ mb: 2, px: 1 }}>
-            <FormLabel id="detector-select-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
-              Detector
-            </FormLabel>
-            <Select
-              labelId="detector-select-label"
-              value={selectedDetector}
-              onChange={handleDetectorChange}
-              size="small"
-              aria-describedby="detector-select-desc"
-              MenuProps={{ PaperProps: { sx: { maxHeight: 200 } } }} // Limit dropdown height
-            >
-              {detectorOptions.map(({ id, label }) => (
-                <MenuItem key={id} value={id}>
-                  {label}
-                </MenuItem>
-              ))}
-            </Select>
-            <Typography
-              variant="caption"
-              id="detector-select-desc"
-              sx={{ mt: 0.5, color: 'text.secondary' }}
-            >
-              Select detector(s) to display data for.
+          <Divider sx={{ my: 1.5 }} />
+
+          {/* Spectrogram View Controls */}
+          <Box sx={{ px: 1 }}>
+            <Typography variant="overline" display="block" gutterBottom >
+              Spectrogram View
             </Typography>
-          </FormControl>
-          {/* Time Window Slider */}
-          <FormControl fullWidth sx={{ mb: 2, px: 1 }}>
-            <FormLabel id="time-window-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
-              Time Window (seconds)
-            </FormLabel>
-            <Slider
-              aria-labelledby="time-window-label"
-              value={timeSteps * 5} // Display value in seconds
-              onChange={handleTimeStepsSliderChange} // Update display immediately
-              // onChangeCommitted={(_, val) => debouncedSetTimeSteps(val)} // Use debouncedSetTimeSteps for final update? No, handled in App.js
-              min={30}
-              max={600}
-              step={5}
-              marks
-              valueLabelDisplay="auto"
-              size="small"
-            />
-            <Typography
-              variant="caption"
-              id="time-window-desc"
-              sx={{ mt: 0.5, color: 'text.secondary' }}
-            >
-              Real-time view duration & history plot length.
-            </Typography>
-          </FormControl>
-          {/* Color Scale */}
-          <FormControl fullWidth sx={{ mb: 2, px: 1 }}>
-            <FormLabel id="colorscale-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
-              Color Scale
-            </FormLabel>
-            <Select
-              labelId="colorscale-label"
-              value={colorScale}
-              onChange={(e) => setColorScale(e.target.value)}
-              size="small"
-            >
-              {/* Use constant for options */}
-              {PLOT_COLOR_SCALES.map((scaleName) => (
-                <MenuItem key={scaleName} value={scaleName}>
-                  {scaleName}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          {/* Normalize Switch */}
-          <FormControlLabel
-            control={
-              <Switch checked={normalize} onChange={() => setNormalize(!normalize)} size="small" />
-            }
-            label="Normalize Amplitude"
-            sx={{ mb: 1, display: 'block', px: 1 }}
-          />
-          {/* Historical Hours Slider (Conditional) */}
-          {historicalMode && (
-            <FormControl fullWidth sx={{ mb: 2, px: 1 }}>
-              <FormLabel id="historical-hours-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
-                Historical Hours
+            <FormControl fullWidth sx={{ mb: 1.5 }}>
+              <FormLabel id="plot-type-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
+                Plot Type
               </FormLabel>
+              <ButtonGroup variant="outlined" aria-labelledby="plot-type-label" fullWidth size="small">
+                <Button
+                  onClick={() => setPlotType('3d')}
+                  variant={plotType === '3d' ? 'contained' : 'outlined'}
+                  startIcon={<ViewInArIcon />}
+                  aria-pressed={plotType === '3d'}
+                >
+                  3D Surface
+                </Button>
+                <Button
+                  onClick={() => setPlotType('2d')}
+                  variant={plotType === '2d' ? 'contained' : 'outlined'}
+                  startIcon={<MapIcon />}
+                  aria-pressed={plotType === '2d'}
+                >
+                  2D Heatmap
+                </Button>
+              </ButtonGroup>
+            </FormControl>
+            <FormControl fullWidth sx={{ mb: 1.5 }}>
+              <FormLabel id="detector-select-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
+                Detector
+              </FormLabel>
+              <Select
+                labelId="detector-select-label"
+                value={selectedDetector}
+                onChange={handleDetectorChange}
+                size="small"
+                aria-describedby="detector-select-desc"
+                MenuProps={{ PaperProps: { sx: { maxHeight: 200 } } }}
+              >
+                {detectorOptions.map(({ id, label }) => (
+                  <MenuItem key={id} value={id}>
+                    {label}
+                  </MenuItem>
+                ))}
+              </Select>
+              <Typography
+                variant="caption"
+                id="detector-select-desc"
+                sx={{ mt: 0.5, color: 'text.secondary' }}
+              >
+                Select detector(s) to display data for.
+              </Typography>
+            </FormControl>
+            <FormControl fullWidth sx={{ mb: 1.5 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{mb: 0.5}}>
+                  <FormLabel id="time-window-label" sx={{ fontSize: '0.8rem' }}>
+                      Time Window
+                  </FormLabel>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                      {displayTimeSeconds}s
+                  </Typography>
+              </Stack>
               <Slider
-                aria-labelledby="historical-hours-label"
-                value={historicalHours}
-                onChange={handleHistoricalHoursSliderChange} // Update display immediately
-                // onChangeCommitted={(_, val) => debouncedSetHistoricalHours(val)} // Use debouncedSetHistoricalHours for final update? No, handled in App.js
-                min={1}
-                max={72}
-                step={1}
+                aria-labelledby="time-window-label"
+                value={displayTimeSeconds}
+                onChange={handleTimeStepsSliderChange}
+                min={30}
+                max={600}
+                step={5}
                 marks
                 valueLabelDisplay="auto"
                 size="small"
               />
+               <Typography variant="caption" id="time-window-desc" sx={{ mt: 0.5, color: 'text.secondary' }}>
+                 Plot length & Real-time view duration.
+               </Typography>
             </FormControl>
-          )}
-          <Divider sx={{ my: 2 }} />
-          {/* --- Peak Info Section --- */}
-          <Typography variant="overline" display="block" gutterBottom sx={{ px: 1 }}>
-            Peak Information
-          </Typography>
-          {selectedDetector !== 'all' ? (
-            <Box
-              sx={{
-                mt: 1,
-                p: 1.5,
-                border: `1px dashed ${theme.palette.divider}`,
-                borderRadius: 1,
-                mx: 1,
-                bgcolor: 'action.hover',
-              }}
-            >
-              <Typography
-                variant="caption"
-                sx={{ display: 'flex', alignItems: 'center', mb: 0.5, fontWeight: 'medium' }}
+            <FormControl fullWidth sx={{ mb: 1.5 }}>
+              <FormLabel id="colorscale-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
+                Color Scale
+              </FormLabel>
+              <Select
+                labelId="colorscale-label"
+                value={colorScale}
+                onChange={(e) => setColorScale(e.target.value)}
+                size="small"
               >
-                <InsightsIcon sx={{ fontSize: '1rem', mr: 0.5, color: 'primary.main' }} />
-                {historicalMode ? 'Latest Hist.' : 'Detected'} Peaks ({selectedDetector}):
-                {/* Show warning icon if historical transients exist */}
-                {historicalMode && historicalTransientEvents.length > 0 && (
-                  <Tooltip
-                    title={`${historicalTransientEvents.length} transient event(s) detected in this period`}
-                  >
-                    <WarningAmberIcon sx={{ ml: 1, color: 'warning.main', fontSize: '1.1rem' }} />
-                  </Tooltip>
-                )}
-              </Typography>
-              {/* Display peak info string or loading/NA message */}
-              <Typography
-                variant="caption"
-                sx={{ display: 'block', wordBreak: 'break-word', pl: 2.5 /* Indent text */ }}
-              >
-                {currentPeakInfo || (isTransitioning || isLoadingData ? 'Loading peaks...' : 'N/A')}
-              </Typography>
-            </Box>
-          ) : (
-            <Typography
-              variant="caption"
-              sx={{ color: 'text.secondary', fontStyle: 'italic', px: 1 }}
-            >
-              Select a specific detector to view peak information.
+                {PLOT_COLOR_SCALES.map((scaleName) => (
+                  <MenuItem key={scaleName} value={scaleName}>
+                    {scaleName}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControlLabel
+              control={
+                <Switch checked={normalize} onChange={() => setNormalize(!normalize)} size="small" />
+              }
+              label="Normalize Amplitude"
+              sx={{ display: 'flex', alignItems: 'center', mb: 1 }}
+            />
+            {historicalMode && (
+              <FormControl fullWidth sx={{ mb: 1.5 }}>
+                 <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{mb: 0.5}}>
+                     <FormLabel id="historical-hours-label" sx={{ fontSize: '0.8rem' }}>
+                         Historical Hours
+                     </FormLabel>
+                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                         {displayHistoricalHours}h
+                     </Typography>
+                 </Stack>
+                <Slider
+                  aria-labelledby="historical-hours-label"
+                  value={displayHistoricalHours}
+                  onChange={handleHistoricalHoursSliderChange}
+                  min={1}
+                  max={72}
+                  step={1}
+                  marks
+                  valueLabelDisplay="auto"
+                  size="small"
+                />
+              </FormControl>
+            )}
+          </Box>
+          <Divider sx={{ my: 1.5 }} />
+
+          {/* SR Peak Info Section - Adjust structure for flex grow */}
+          <Box sx={{ px: 1, display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 /* Allow shrinking if needed initially */ }}>
+            <Typography variant="overline" display="block" gutterBottom sx={{ flexShrink: 0 }}> {/* Prevent title shrinking */}
+              Schumann Resonance Peaks
             </Typography>
-          )}
-          {/* Loading Indicator */}
-          {(isLoadingData || isTransitioning) && (
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                mt: 2,
-                px: 1,
-                color: theme.palette.text.secondary,
-              }}
-            >
-              <CircularProgress size={16} sx={{ mr: 1 }} />
-              <Typography variant="caption">Loading data...</Typography>
-            </Box>
-          )}
-        </Box>{' '}
-        {/* End Scrollable Controls Area */}
-        {/* --- Globe Section --- */}
-        {/* Fixed at the bottom of the drawer */}
+            {selectedDetector !== 'all' ? (
+              <Box
+                sx={{
+                  mt: 0.5, // Reduce top margin
+                  p: 1, // Slightly reduce padding
+                  border: `1px dashed ${theme.palette.divider}`,
+                  borderRadius: 1,
+                  bgcolor: 'action.hover',
+                  flexGrow: 1, // Allow this box to grow
+                  display: 'flex', // Use flex for internal layout
+                  flexDirection: 'column', // Stack title and list
+                  overflow: 'hidden', // Hide overflow until inner box handles it
+                  minHeight: '80px', // Ensure it doesn't collapse completely when empty
+                }}
+              >
+                <Typography
+                  variant="caption"
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    mb: 0.5, // Reduce margin below title
+                    fontWeight: 'medium',
+                    flexShrink: 0, // Prevent title shrinking
+                  }}
+                >
+                  <InsightsIcon sx={{ fontSize: '1rem', mr: 0.5, color: 'primary.main' }} />
+                  {historicalMode ? 'Latest Hist.' : 'Detected'} SR Peaks ({selectedDetector}):
+                  {historicalMode && historicalTransientEvents.length > 0 && (
+                    <Tooltip
+                      title={`${historicalTransientEvents.length} transient event(s) detected in this period`}
+                    >
+                      <WarningAmberIcon sx={{ ml: 1, color: 'warning.main', fontSize: '1.1rem' }} />
+                    </Tooltip>
+                  )}
+                </Typography>
+                {/* Scrollable Container for Peak List */}
+                <Box sx={{ flexGrow: 1, overflowY: 'auto', pr: 0.5 }}> {/* Add slight right padding for scrollbar */}
+                  {(isLoadingData || isTransitioning) ? (
+                     <Box sx={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%'}}>
+                         <CircularProgress size={20} />
+                     </Box>
+                  ) : schumannPeaks && schumannPeaks.length > 0 ? (
+                     schumannPeaks.map((peak, index) => (
+                      <Typography key={index} variant="caption" display="block" sx={{ mb: 0.5, pl: '10px' /* Indent slightly */ }}>
+                        {`F: ${peak.freq.toFixed(2)}, A: ${peak.amp.toFixed(1)}, Q: ${peak.qFactor ? peak.qFactor.toFixed(1) : 'N/A'}, S: ${peak.trackStatus === 'new' ? 'New' : 'Cont.'}`}
+                      </Typography>
+                    ))
+                  ) : (
+                      <Typography variant="caption" sx={{ color: 'text.secondary', pl: '10px' }}>
+                         {schumannPeaks === null ? 'Select detector' : 'No SR peaks detected.'}
+                      </Typography>
+                  )}
+                </Box>
+              </Box>
+            ) : (
+              <Typography
+                variant="caption"
+                sx={{ color: 'text.secondary', fontStyle: 'italic', px: 1, mb: 2, display: 'block' }}
+              >
+                Select a specific detector to view SR peak information.
+              </Typography>
+            )}
+          </Box>
+
+        </Box> {/* End Scrollable Controls Area */}
+
+        {/* Globe Section (Fixed at bottom) */}
         <Box
           sx={{
-            p: 1,
+            p: 1.5,
             display: 'flex',
             justifyContent: 'center',
             borderTop: `1px solid ${theme.palette.divider}`,
-            flexShrink: 0,
+            flexShrink: 0, // Keep globe fixed size
+            mt: 'auto' // Push globe to the bottom
           }}
         >
-          {/* Render Globe only if the drawer is open to avoid unnecessary background processing */}
           {drawerOpen && (
             <Globe
               ref={globeRef}
               globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
               bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
-              backgroundColor="rgba(0,0,0,0)" // Transparent background
-              pointsData={globePoints} // Data for detector markers
+              backgroundColor="rgba(0,0,0,0)"
+              pointsData={globePoints}
               pointLat="lat"
               pointLng="lng"
-              pointColor="color" // Use color defined in App.js memo
-              pointRadius={0.25} // Base radius
-              pointAltitude="size" // Use size defined in App.js memo for pulsing effect
-              pointLabel="label" // Tooltip label
-              onPointClick={handleGlobePointClick} // Handler for clicking points
-              onPointHover={handleGlobePointHover} // Handler for hovering points (optional)
-              width={drawerWidth - 16} // Fit globe within drawer padding
-              height={drawerWidth - 16}
-              atmosphereColor={darkMode ? 'lightblue' : 'dodgerblue'} // Theme-aware atmosphere
+              pointColor="color"
+              pointRadius={0.25}
+              pointAltitude="size"
+              pointLabel="label"
+              onPointClick={handleGlobePointClick}
+              onPointHover={handleGlobePointHover}
+              width={drawerWidth - 24}
+              height={drawerWidth - 24}
+              atmosphereColor={darkMode ? 'lightblue' : 'dodgerblue'}
               atmosphereAltitude={0.25}
-              animateIn={true} // Animate globe appearance
-              pointResolution={4} // Adjust resolution for performance vs detail
+              animateIn={true}
+              pointResolution={4}
             />
           )}
         </Box>
@@ -405,8 +406,6 @@ const ControlsDrawer = React.memo(
   }
 );
 
-// --- PropTypes ---
-// Define expected prop types for type checking and documentation
 ControlsDrawer.propTypes = {
   drawerWidth: PropTypes.number.isRequired,
   appBarHeight: PropTypes.number.isRequired,
@@ -431,9 +430,9 @@ ControlsDrawer.propTypes = {
   debouncedSetHistoricalHours: PropTypes.func.isRequired,
   isLoadingData: PropTypes.bool.isRequired,
   isTransitioning: PropTypes.bool.isRequired,
-  currentPeakInfo: PropTypes.string, // Can be null or string
-  historicalTransientEvents: PropTypes.array.isRequired, // Array of transient objects
-  globePoints: PropTypes.array.isRequired, // Array of points for the globe
+  schumannPeaks: PropTypes.array,
+  historicalTransientEvents: PropTypes.array.isRequired,
+  globePoints: PropTypes.array.isRequired,
   handleGlobePointClick: PropTypes.func.isRequired,
   handleGlobePointHover: PropTypes.func.isRequired,
   plotType: PropTypes.oneOf(['2d', '3d']).isRequired,

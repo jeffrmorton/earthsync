@@ -1,18 +1,16 @@
 // server/websocketManager.js
 /**
  * Manages WebSocket connections, authentication, and message broadcasting.
+ * No backslash escapes in template literals.
  */
 const WebSocket = require('ws');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-// Import the *getter* function, not the client instance directly
 const { getRedisClient } = require('./utils/redisClients');
 const { websocketConnections } = require('./utils/metrics');
 const { JWT_SECRET, REDIS_USER_KEY_PREFIX } = require('./config/constants');
 const logger = require('./utils/logger');
 
-// Remove the top-level client retrieval
-// const redisClient = getRedisClient(); // <--- REMOVED
 let wss = null;
 
 /**
@@ -28,44 +26,41 @@ function initializeWebSocketServer(httpServer) {
   wss = new WebSocket.Server({ server: httpServer });
 
   wss.on('connection', async (ws, req) => {
-    let username = 'unknown'; // Default username for logging before auth
+    let username = 'unknown';
     try {
       // 1. Extract token from connection URL
-      const requestUrl = new URL(req.url, `ws://${req.headers.host}`);
+      const requestUrl = new URL(req.url, `ws://${req.headers.host}`); // Corrected interpolation
       const token = requestUrl.searchParams.get('token');
 
       if (!token) {
         logger.warn('WebSocket connection denied: No token provided.', {
           ip: req.socket.remoteAddress,
         });
-        ws.close(1008, 'Token required'); // 1008: Policy Violation
+        ws.close(1008, 'Token required');
         return;
       }
 
       // 2. Verify JWT token
       const decoded = jwt.verify(token, JWT_SECRET);
-      username = decoded.username; // Assign username after successful verification
+      username = decoded.username;
 
       if (!username) {
         throw new Error('Token payload missing username');
       }
 
-      // Attach username to the WebSocket object for later reference
       ws.username = username;
 
       logger.info('WebSocket client connected and authenticated.', {
         username,
         ip: req.socket.remoteAddress,
       });
-      websocketConnections.inc(); // Increment active connections metric
+      websocketConnections.inc();
 
-      // 3. Setup event listeners for the authenticated connection
+      // 3. Setup event listeners
       ws.on('message', (message) => {
-        // Log received message (optional, could be noisy)
-        // Avoid processing client messages unless specifically designed for it
         logger.debug('WebSocket message received (usually ignored)', {
           username,
-          message: message.toString().substring(0, 100), // Log only a snippet
+          message: message.toString().substring(0, 100),
         });
       });
 
@@ -75,20 +70,17 @@ function initializeWebSocketServer(httpServer) {
           code,
           reason: reason.toString(),
         });
-        websocketConnections.dec(); // Decrement active connections metric
+        websocketConnections.dec();
       });
 
       ws.on('error', (err) => {
         logger.error('WebSocket connection error.', { username, error: err.message });
-        // Check if connection is still open before decrementing (error might precede close)
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
           websocketConnections.dec();
         }
-        // No need to close here, 'close' event usually follows 'error'
       });
     } catch (err) {
-      // Handle errors during connection setup (e.g., invalid token)
-      let closeCode = 1011; // Internal Error default
+      let closeCode = 1011;
       let closeReason = 'Internal server error during connection setup';
       if (err instanceof jwt.TokenExpiredError) {
         logger.warn('WebSocket connection failed: Token expired', {
@@ -102,7 +94,7 @@ function initializeWebSocketServer(httpServer) {
           error: err.message,
           ip: req.socket.remoteAddress,
         });
-        closeCode = 1008; // Policy Violation
+        closeCode = 1008;
         closeReason = 'Invalid token';
       } else {
         logger.error('WebSocket connection setup error', {
@@ -112,12 +104,10 @@ function initializeWebSocketServer(httpServer) {
         });
       }
       ws.close(closeCode, closeReason);
-      // Do not increment websocketConnections if auth fails
     }
   });
 
   wss.on('error', (err) => {
-    // Handle errors on the WebSocket server itself (e.g., port binding issues - less likely here as it attaches to http)
     logger.error('WebSocket Server Instance Error', { error: err.message });
   });
 
@@ -133,13 +123,12 @@ function initializeWebSocketServer(httpServer) {
  */
 function encryptMessage(messageString, keyHex) {
   try {
-    const iv = crypto.randomBytes(16); // Generate a random IV for each encryption
+    const iv = crypto.randomBytes(16);
     const key = Buffer.from(keyHex, 'hex');
     const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
     let encrypted = cipher.update(messageString, 'utf8', 'base64');
     encrypted += cipher.final('base64');
-    // Return ciphertext and IV together, separated by a colon
-    return `${encrypted}:${iv.toString('base64')}`;
+    return `${encrypted}:${iv.toString('base64')}`; // Corrected interpolation
   } catch (error) {
     logger.error('Message encryption failed', { error: error.message });
     return null;
@@ -157,40 +146,33 @@ async function broadcastMessage(wsMessagePayload) {
     return;
   }
 
-  // Get the redisClient *inside* the function where it's needed
   const redisClient = getRedisClient();
-
   const wsMessageString = JSON.stringify(wsMessagePayload);
   let sentCount = 0;
   const totalClients = wss.clients.size;
 
   if (totalClients === 0) {
-    return; // No clients, nothing to do
+    return;
   }
 
-  logger.debug(`Broadcasting message to ${totalClients} potential clients`, {
+  logger.debug(`Broadcasting message to ${totalClients} potential clients`, { // Corrected interpolation
     detectorId: wsMessagePayload.detectorId,
     peakCount: wsMessagePayload.detectedPeaks?.length || 0,
     transientType: wsMessagePayload.transientInfo?.type || 'none',
   });
 
-  // Iterate over all connected clients using a standard loop or forEach
   const broadcastPromises = [];
   wss.clients.forEach((ws) => {
-    // Check if the connection is open and the client is authenticated (has a username)
     if (ws.readyState === WebSocket.OPEN && ws.username) {
-      const userRedisKey = `${ws.username}`; // Prefix handled by Redis client config
+      const userRedisKey = `${ws.username}`; // Corrected interpolation
 
-      // Asynchronously retrieve key and send message for this client
       const sendPromise = (async () => {
         try {
-          // Get client instance HERE
           const keyHex = await redisClient.get(userRedisKey);
 
           if (keyHex) {
             const encryptedMessage = encryptMessage(wsMessageString, keyHex);
             if (encryptedMessage) {
-              // Promisify ws.send for cleaner error handling with Promise.allSettled
               await new Promise((resolve, reject) => {
                 ws.send(encryptedMessage, (err) => {
                   if (err) {
@@ -198,13 +180,13 @@ async function broadcastMessage(wsMessagePayload) {
                       username: ws.username,
                       error: err.message,
                     });
-                    reject(err); // Reject promise on send error
+                    reject(err);
                   } else {
-                    resolve(); // Resolve on successful send
+                    resolve();
                   }
                 });
               });
-              sentCount++; // Increment only if send was successful
+              sentCount++;
             } else {
               logger.warn('WebSocket send skipped: Encryption error', { username: ws.username });
             }
@@ -220,21 +202,20 @@ async function broadcastMessage(wsMessagePayload) {
             error: redisErr.message,
           });
         }
-      })(); // Immediately invoke the async function for this client
-      broadcastPromises.push(sendPromise.catch((e) => e)); // Catch individual errors but continue broadcast
+      })();
+      broadcastPromises.push(sendPromise.catch((e) => e));
     } else {
       logger.debug('WebSocket send skipped: Client not open or not authenticated', {
         username: ws.username || 'N/A',
         state: ws.readyState,
       });
     }
-  }); // End loop through clients
+  });
 
-  // Wait for all send operations to complete (or fail)
   await Promise.allSettled(broadcastPromises);
 
   logger.debug(
-    `Broadcast attempt complete. Sent successfully to ${sentCount} / ${totalClients} clients.`
+    `Broadcast attempt complete. Sent successfully to ${sentCount} / ${totalClients} clients.` // Corrected interpolation
   );
 }
 
@@ -243,8 +224,7 @@ async function broadcastMessage(wsMessagePayload) {
  */
 function closeAllConnections() {
   if (!wss) return;
-  logger.info(`Terminating all (${wss.clients.size}) WebSocket connections...`);
-  // Use terminate for immediate, forceful closure during shutdown
+  logger.info(`Terminating all (${wss.clients.size}) WebSocket connections...`); // Corrected interpolation
   wss.clients.forEach((ws) => {
     ws.terminate();
   });
@@ -255,5 +235,5 @@ module.exports = {
   initializeWebSocketServer,
   broadcastMessage,
   closeAllConnections,
-  encryptMessage, // Export for potential testing or other uses
+  encryptMessage,
 };

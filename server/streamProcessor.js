@@ -1,16 +1,18 @@
 // server/streamProcessor.js
 /**
  * Processes messages from the Redis spectrogram stream.
- * Handles downsampling, peak detection/tracking, transient detection,
- * storing results in history, and initiating broadcasts.
+ * Handles downsampling (with anti-aliasing), peak detection/tracking, transient detection,
+ * storing INDIVIDUAL processed results in history list, and initiating broadcasts.
+ * Assumes batch size is 1 due to detector/ingest constraints. No backslash escapes in template literals.
+ * Fixes potential race condition on startup/reconnect with XREADGROUP.
  */
-// Import the *getter* function, not the client instance directly
 const { getStreamRedisClient } = require('./utils/redisClients');
 const {
   detectPeaksEnhanced,
   trackPeaks,
   detectTransients,
-  RAW_FREQUENCY_POINTS, // Import constant
+  downsampleWithAntiAliasing,
+  RAW_FREQUENCY_POINTS,
 } = require('./processingUtils');
 const { broadcastMessage } = require('./websocketManager');
 const { peaksDetectedCounter, transientsDetectedCounter } = require('./utils/metrics');
@@ -24,12 +26,10 @@ const {
 } = require('./config/constants');
 const logger = require('./utils/logger');
 
-// Removed top-level client retrieval
-// const streamRedisClient = getStreamRedisClient();
-const CONSUMER_NAME = `consumer_${process.pid}`; // Unique consumer name per process
+const CONSUMER_NAME = `consumer_${process.pid}`;
 
-let processingActive = false; // Flag to control the main loop
-let isShuttingDown = false; // Flag to signal shutdown process
+let processingActive = false;
+let isShuttingDown = false;
 
 /**
  * Parses a message from the Redis stream.
@@ -45,20 +45,21 @@ function parseStreamMessage(fields, messageId) {
   }
   try {
     const parsedMessage = JSON.parse(fields[dataIndex + 1]);
-    // Basic structure validation
     if (
       !parsedMessage.spectrogram ||
       !parsedMessage.detectorId ||
       !parsedMessage.location ||
-      !Array.isArray(parsedMessage.spectrogram)
+      !Array.isArray(parsedMessage.spectrogram) ||
+      parsedMessage.spectrogram.length !== 1 ||
+      !Array.isArray(parsedMessage.spectrogram[0])
     ) {
-      logger.warn('Invalid message structure in stream', {
+      logger.warn('Invalid message structure or batch size != 1 in stream', {
         messageId,
         detectorId: parsedMessage?.detectorId,
+        batchSize: parsedMessage?.spectrogram?.length,
       });
       return null;
     }
-    // Validate timestamp or default to current time
     let messageTimestampMs = parsedMessage.timestamp
       ? new Date(parsedMessage.timestamp).getTime()
       : Date.now();
@@ -70,7 +71,7 @@ function parseStreamMessage(fields, messageId) {
       });
       messageTimestampMs = Date.now();
     }
-    parsedMessage.timestampMs = messageTimestampMs; // Add parsed timestamp in ms
+    parsedMessage.timestampMs = messageTimestampMs;
     return parsedMessage;
   } catch (e) {
     logger.error('Failed to parse JSON from stream message', { messageId, error: e.message });
@@ -79,27 +80,22 @@ function parseStreamMessage(fields, messageId) {
 }
 
 /**
- * Processes a single raw spectrogram from a batch.
- * Performs downsampling, peak detection/tracking, and transient detection.
+ * Processes a single raw spectrogram.
  * @param {Array<number>} rawSpec - The raw spectrogram data.
  * @param {string} detectorId - The ID of the detector.
  * @param {number} timestampMs - The timestamp for this data.
- * @param {number} specIndex - The index of this spectrum within its batch.
  * @returns {Promise<object>} Object containing { downsampled, detectedPeaks, transientInfo }.
  */
-async function processSingleSpectrum(rawSpec, detectorId, timestampMs, specIndex) {
+async function processSingleSpectrum(rawSpec, detectorId, timestampMs) {
   let detectedPeaks = [];
   let transientInfo = { type: 'none', details: null };
   let downsampled = [];
 
-  // Validate input spectrum
   if (!Array.isArray(rawSpec) || rawSpec.length !== RAW_FREQUENCY_POINTS) {
-    logger.warn('Item in spectrogram batch is not valid raw spectrum', {
+    logger.warn('Received invalid raw spectrum data for processing', {
       detectorId,
-      specIndex,
       length: rawSpec?.length,
     });
-    // Return default error state if spectrum is invalid
     return {
       downsampled: [],
       detectedPeaks: [],
@@ -108,43 +104,13 @@ async function processSingleSpectrum(rawSpec, detectorId, timestampMs, specIndex
   }
 
   try {
-    // Get stream client instance *inside* the function
-    const streamRedisClient = getStreamRedisClient();
+    const streamRedisClient = getStreamRedisClient(); // Get client instance when needed
 
-    // 1. Downsample
-    downsampled = rawSpec.filter((_, i) => i % DOWNSAMPLE_FACTOR === 0);
-
-    // 2. Peak Detection
-    const peakDetectionStart = Date.now();
-    // Pass empty config to use defaults defined within processingUtils
+    downsampled = downsampleWithAntiAliasing(rawSpec, DOWNSAMPLE_FACTOR);
     const detectedPeaksRaw = detectPeaksEnhanced(rawSpec, {});
-    const peakDetectionDuration = Date.now() - peakDetectionStart;
-    if (peakDetectionDuration > 100) {
-      // Log if detection takes longer than 100ms
-      logger.warn('Peak detection took longer than expected', {
-        detectorId,
-        specIndex,
-        durationMs: peakDetectionDuration,
-        peakCount: detectedPeaksRaw.length,
-      });
-    } else {
-      logger.debug('Peak detection duration', {
-        detectorId,
-        specIndex,
-        durationMs: peakDetectionDuration,
-        peakCount: detectedPeaksRaw.length,
-      });
-    }
+    detectedPeaks = await trackPeaks(detectorId, detectedPeaksRaw, timestampMs, {});
+    transientInfo = await detectTransients(detectorId, rawSpec, streamRedisClient, {});
 
-    // 3. Peak Tracking (updates DB state internally)
-    // Pass timestamp for state management and potential TTL logic (though DB handles persistence now)
-    detectedPeaks = await trackPeaks(detectorId, detectedPeaksRaw, timestampMs, {}); // Pass empty config
-
-    // 4. Transient Detection
-    // Pass streamRedisClient instance for history lookup
-    transientInfo = await detectTransients(detectorId, rawSpec, streamRedisClient, {}); // Pass empty config
-
-    // --- Update Prometheus Metrics ---
     if (detectedPeaks.length > 0) {
       peaksDetectedCounter.inc({ detectorId }, detectedPeaks.length);
     }
@@ -154,18 +120,15 @@ async function processSingleSpectrum(rawSpec, detectorId, timestampMs, specIndex
   } catch (err) {
     logger.error('Error during single spectrum processing', {
       detectorId,
-      specIndex,
       timestampMs,
       error: err.message,
       stack: err.stack,
     });
-    // Set error state for this specific spectrum's results
     transientInfo = { type: 'error', details: `Spectrum processing error: ${err.message}` };
-    detectedPeaks = []; // Ensure no peaks are reported on error
-    downsampled = []; // Clear downsampled data on error? Or keep it? Clearing for safety.
+    detectedPeaks = [];
+    downsampled = [];
   }
 
-  // Return results for this single spectrum
   return { downsampled, detectedPeaks, transientInfo };
 }
 
@@ -177,85 +140,83 @@ async function startStreamProcessing() {
     logger.warn('Stream processing loop already active. Skipping new invocation.');
     return;
   }
-  processingActive = true; // Set flag immediately
-  isShuttingDown = false; // Reset shutdown flag on start
+  processingActive = true;
+  isShuttingDown = false;
   logger.info(`Starting stream processing loop for consumer ${CONSUMER_NAME}...`);
 
   try {
-    // Get stream client instance here for setup
-    const streamRedisClient = getStreamRedisClient();
+    const streamRedisClient = getStreamRedisClient(); // Get client instance for setup
 
-    // Ensure consumer group exists or create it for the stream
-    await streamRedisClient
-      .xgroup('CREATE', REDIS_SPECTROGRAM_STREAM_KEY, REDIS_STREAM_GROUP_NAME, '$', 'MKSTREAM')
-      .catch((err) => {
-        // Ignore error if group already exists, throw others
-        if (!err.message.includes('BUSYGROUP Consumer Group name already exists')) {
-          logger.error('Failed to create/verify consumer group', {
-            group: REDIS_STREAM_GROUP_NAME,
-            error: err.message,
-          });
-          throw err;
-        }
-        logger.info(`Consumer group '${REDIS_STREAM_GROUP_NAME}' already exists.`);
-      });
+    // --- Ensure Consumer Group Exists (Run Once Before Loop) ---
+    try {
+      await streamRedisClient.xgroup(
+        'CREATE',
+        REDIS_SPECTROGRAM_STREAM_KEY,
+        REDIS_STREAM_GROUP_NAME,
+        '$',
+        'MKSTREAM'
+      );
+      logger.info(`Created consumer group '${REDIS_STREAM_GROUP_NAME}'.`);
+    } catch (err) {
+      if (!err.message.includes('BUSYGROUP Consumer Group name already exists')) {
+        logger.error('Failed to create/verify consumer group', {
+          group: REDIS_STREAM_GROUP_NAME,
+          error: err.message,
+        });
+        throw err; // Rethrow if it's not the expected error
+      }
+      logger.info(`Consumer group '${REDIS_STREAM_GROUP_NAME}' already exists.`);
+    }
+    // --- End Consumer Group Check ---
 
     logger.info(
       `Consumer ${CONSUMER_NAME} ready to process stream ${REDIS_SPECTROGRAM_STREAM_KEY}`
     );
 
-    // Main processing loop - continues as long as processingActive is true
     while (processingActive) {
       if (isShuttingDown) {
-        // Check shutdown flag
         logger.info('Shutdown signal received, exiting stream processing loop.');
         break;
       }
       try {
-        // Read messages using XREADGROUP, blocking for up to 5 seconds if no messages
-        // Use the already retrieved streamRedisClient instance
+        // --- Check connection status before blocking read ---
+        if (streamRedisClient.status !== 'ready') {
+          logger.warn(`Redis stream client not ready (status: ${streamRedisClient.status}). Waiting...`);
+          await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1s before retrying loop
+          continue;
+        }
+        // --- End connection status check ---
+
         const results = await streamRedisClient.xreadgroup(
           'GROUP',
           REDIS_STREAM_GROUP_NAME,
           CONSUMER_NAME,
           'COUNT',
-          10, // Process up to 10 messages per iteration
+          10,
           'BLOCK',
-          5000, // Block for max 5000ms
+          5000,
           'STREAMS',
           REDIS_SPECTROGRAM_STREAM_KEY,
-          '>' // Read only new messages delivered to this consumer
+          '>'
         );
 
-        // results is null if the BLOCK timeout expires
         if (!results) {
-          // logger.debug('No new messages in stream, continuing block.'); // Can be noisy
-          continue; // Loop again to wait for messages
+          continue; // Timeout, loop again
         }
 
-        // Process messages received (results is an array of streams)
         for (const [streamName, messages] of results) {
-          // Should only contain our stream key, but check just in case
           if (streamName !== REDIS_SPECTROGRAM_STREAM_KEY) continue;
 
-          // Process each message within the stream result
           for (const [messageId, fields] of messages) {
-            // Reset flag for each message, assume ACK unless critical failure
             let shouldAck = true;
             const parsedMessage = parseStreamMessage(fields, messageId);
 
             if (!parsedMessage) {
-              // Invalid message format, log and ACK to remove from stream
               logger.warn('Acking invalid message due to parsing failure', { messageId });
               await streamRedisClient
                 .xack(REDIS_SPECTROGRAM_STREAM_KEY, REDIS_STREAM_GROUP_NAME, messageId)
-                .catch((ackErr) => {
-                  logger.error('Failed to ACK invalid message', {
-                    messageId,
-                    error: ackErr.message,
-                  });
-                });
-              continue; // Skip to next message
+                .catch((ackErr) => logger.error('Failed to ACK invalid message', { messageId, error: ackErr.message }));
+              continue;
             }
 
             const {
@@ -266,90 +227,57 @@ async function startStreamProcessing() {
               timestampMs,
             } = parsedMessage;
 
+            // Since batch size is fixed to 1, we process only the first (index 0)
+            if (rawSpectrogramBatch.length !== 1) {
+               logger.warn('Received unexpected batch size > 1, processing only first spectrum.', { messageId, detectorId });
+            }
+
             try {
               const processingStartTime = Date.now();
-              // Get a new pipeline instance for this message batch
-              const historyPipeline = streamRedisClient.pipeline();
-              const downsampledBatch = [];
-              const allProcessingResults = []; // Array to hold { detectedPeaks, transientInfo } for each spec
-              let firstSpectrumPeaksForWs = []; // Store results from the first spec for WS broadcast
-              let firstSpectrumTransientForWs = { type: 'none', details: null };
+              const historyPipeline = streamRedisClient.pipeline(); // Create pipeline for this message
 
-              logger.debug(
-                `Processing batch for ${detectorId} (size: ${rawSpectrogramBatch.length}) msgId: ${messageId}`
+              // Process the single raw spectrum
+              const result = await processSingleSpectrum(
+                rawSpectrogramBatch[0],
+                detectorId,
+                timestampMs
               );
 
-              // --- Process Each Raw Spectrum in Batch ---
-              for (let specIndex = 0; specIndex < rawSpectrogramBatch.length; specIndex++) {
-                // Process each spectrum individually
-                const result = await processSingleSpectrum(
-                  rawSpectrogramBatch[specIndex],
-                  detectorId,
-                  timestampMs,
-                  specIndex
-                );
-
-                // Collect results
-                downsampledBatch.push(result.downsampled);
-                allProcessingResults.push({
-                  detectedPeaks: result.detectedPeaks,
-                  transientInfo: result.transientInfo,
-                });
-
-                // Add individual peak results to Redis ZSET history using pipeline
-                if (result.detectedPeaks.length > 0) {
-                  const peakKey = `${REDIS_PEAK_HISTORY_PREFIX}${detectorId}`;
-                  // Use timestamp + index offset for score to ensure unique scores if multiple spectra in batch have same timestamp
-                  const peakScore = timestampMs + specIndex;
-                  historyPipeline.zadd(peakKey, peakScore, JSON.stringify(result.detectedPeaks));
-                  // logger.debug("Adding tracked peaks to history ZSET", { key: peakKey, specIndex, score: peakScore, count: result.detectedPeaks.length });
-                }
-
-                // Capture results from the first spectrum for WebSocket broadcast
-                if (specIndex === 0) {
-                  firstSpectrumPeaksForWs = result.detectedPeaks;
-                  firstSpectrumTransientForWs = result.transientInfo;
-                }
-              } // End loop through raw spectra in batch
-
-              // --- Prepare Data for History List ---
-              // Store the *entire* batch's downsampled data and processing results
+              // Prepare single-spectrum data for history list
               const dataToStoreInHistory = {
                 detectorId: detectorId,
-                timestamp: new Date(timestampMs).toISOString(), // Store ISO string in history
+                timestamp: new Date(timestampMs).toISOString(),
                 location: location,
                 interval: interval,
-                spectrogram: downsampledBatch, // Store the array of downsampled spectra
-                processingResults: allProcessingResults, // Store the array of corresponding results
+                spectrogram: result.downsampled || [],
+                processingResults: [ { detectedPeaks: result.detectedPeaks, transientInfo: result.transientInfo } ],
               };
               const messageStringForHistory = JSON.stringify(dataToStoreInHistory);
 
-              // --- Add to Redis History List using Pipeline ---
+              // Add individual record to Redis History List
               const historyKey = `${REDIS_SPEC_HISTORY_PREFIX}${detectorId}`;
               historyPipeline.lpush(historyKey, messageStringForHistory);
-              // Trim the list to keep only the most recent entries
               historyPipeline.ltrim(historyKey, 0, MAX_SPECTROGRAM_HISTORY_LENGTH - 1);
-              logger.debug('Adding processed data batch to history list (and trimming)', {
-                key: historyKey,
-                numSpectra: downsampledBatch.length,
-              });
 
-              // --- Execute Redis Pipeline ---
-              // This atomically executes ZADD(s) and LPUSH/LTRIM
+              // Add Peaks to Redis History ZSet
+              if (result.detectedPeaks.length > 0) {
+                const peakKey = `${REDIS_PEAK_HISTORY_PREFIX}${detectorId}`;
+                historyPipeline.zadd(peakKey, timestampMs, JSON.stringify(result.detectedPeaks));
+              }
+
+              // Execute Redis Pipeline
               await historyPipeline.exec();
 
-              // --- Prepare and Broadcast WebSocket Message ---
-              // Payload contains ONLY the results from the *first* spectrum in the batch
+              // Prepare and Broadcast WebSocket Message
               const wsMessagePayload = {
                 detectorId: detectorId,
                 timestamp: new Date(timestampMs).toISOString(),
                 location: location,
                 interval: interval,
-                spectrogram: [downsampledBatch[0] || []], // Send only the first downsampled
-                detectedPeaks: firstSpectrumPeaksForWs,
-                transientInfo: firstSpectrumTransientForWs,
+                spectrogram: [result.downsampled || []],
+                detectedPeaks: result.detectedPeaks,
+                transientInfo: result.transientInfo,
               };
-              // Asynchronously broadcast the message (don't block processing loop)
               broadcastMessage(wsMessagePayload).catch((broadcastErr) => {
                 logger.error('Error during WebSocket broadcast', { error: broadcastErr.message });
               });
@@ -358,6 +286,7 @@ async function startStreamProcessing() {
               logger.debug(
                 `Finished processing message ${messageId} for ${detectorId}. Duration: ${processingDuration}ms`
               );
+
             } catch (processingError) {
               logger.error('Critical error during stream message processing', {
                 messageId,
@@ -365,11 +294,8 @@ async function startStreamProcessing() {
                 error: processingError.message,
                 stack: processingError.stack,
               });
-              // Decide if message should be ACKed or retried.
-              // For persistent errors, ACK to avoid reprocessing loops.
               shouldAck = true;
             } finally {
-              // Acknowledge the message was processed (or failed non-transiently)
               if (shouldAck) {
                 await streamRedisClient
                   .xack(REDIS_SPECTROGRAM_STREAM_KEY, REDIS_STREAM_GROUP_NAME, messageId)
@@ -378,32 +304,30 @@ async function startStreamProcessing() {
                   });
               }
             }
-          } // End processing messages in this read
-        } // End processing results from xreadgroup
+          }
+        }
       } catch (readError) {
-        // Handle errors reading from the stream (e.g., connection issues)
         logger.error('Error reading from Redis stream group', {
           group: REDIS_STREAM_GROUP_NAME,
           error: readError.message,
-          stack: readError.stack,
+          // Avoid logging full stack for potentially frequent connection errors
+          // stack: readError.stack,
         });
-        // Wait before retrying to avoid tight loop on persistent connection errors
+        // Wait only if the error wasn't due to shutdown
         if (processingActive && !isShuttingDown) {
-          // Avoid sleeping if shutting down
-          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
+             logger.info('Waiting 5 seconds before retrying stream read...');
+             await new Promise((resolve) => setTimeout(resolve, 5000));
         }
       }
     } // End while loop
   } catch (setupError) {
-    // Handle errors during initial setup (e.g., creating consumer group)
     logger.error('Stream processing setup failed fatally', {
       error: setupError.message,
       stack: setupError.stack,
     });
-    // Optionally retry setup after a delay? Or signal failure to main process?
-    processingActive = false; // Ensure loop flag is false
+    processingActive = false; // Ensure loop flag is false on setup failure
   } finally {
-    processingActive = false; // Ensure flag is reset if loop exits unexpectedly
+    processingActive = false;
     logger.info('Stream processing loop has stopped.');
   }
 }
@@ -414,8 +338,8 @@ async function startStreamProcessing() {
 function stopStreamProcessing() {
   if (processingActive) {
     logger.info('Signaling stream processing loop to stop...');
-    isShuttingDown = true; // Set shutdown flag
-    processingActive = false; // Allow loop condition to terminate
+    isShuttingDown = true;
+    processingActive = false;
   } else {
     logger.info('Stream processing loop already stopped or not started.');
   }

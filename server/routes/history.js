@@ -1,28 +1,24 @@
 // server/routes/history.js
 /**
  * API Routes for retrieving historical data (Spectrograms, Peaks)
+ * Handles combined fetching from Redis (individual records) and PostgreSQL. No backslash escapes in template literals.
  */
 const express = require('express');
 const { param, query: queryValidator } = require('express-validator');
 const { authenticateToken } = require('../middleware'); // JWT Auth middleware
 const db = require('../db'); // DB access
-// Import the *getter* function only
 const { getStreamRedisClient } = require('../utils/redisClients');
-const { validateRequest } = require('../utils/validation'); // Validation helper
+const { validateRequest } = require('../utils/validation');
 const {
   REDIS_SPEC_RETENTION_MS,
   REDIS_PEAK_RETENTION_MS,
   REDIS_SPEC_HISTORY_PREFIX,
   REDIS_PEAK_HISTORY_PREFIX,
   REDIS_HISTORY_CACHE_PREFIX,
-  // STATUS_OK, // Not directly used here
-  // STATUS_ERROR, // Not directly used here
-} = require('../config/constants'); // Centralized constants
-const logger = require('../utils/logger'); // Centralized logger
+} = require('../config/constants');
+const logger = require('../utils/logger');
 
 const router = express.Router();
-// Removed top-level client retrieval
-// const streamRedisClient = getStreamRedisClient();
 
 // --- Validation Rules ---
 const historyHoursValidationRules = [
@@ -52,7 +48,6 @@ const historyRangeValidationRules = [
     .notEmpty()
     .isLength({ min: 1, max: 50 })
     .withMessage('Invalid detector ID format (must be 1-50 chars).'),
-  // Custom validator for time range logic
   queryValidator().custom((value, { req }) => {
     const { startTime, endTime } = req.query;
     if (!startTime || !endTime) {
@@ -66,7 +61,7 @@ const historyRangeValidationRules = [
     if (endMs <= startMs) {
       throw new Error('endTime must be strictly after startTime.');
     }
-    const maxRangeMs = 31 * 24 * 60 * 60 * 1000; // Example: 31 days
+    const maxRangeMs = 31 * 24 * 60 * 60 * 1000;
     if (endMs - startMs > maxRangeMs) {
       throw new Error(
         `Time range cannot exceed 31 days. Requested range: ${((endMs - startMs) / (1000 * 60 * 60 * 24)).toFixed(1)} days.`
@@ -100,7 +95,7 @@ function getQueryTimeRange(hours, startTimeStr, endTimeStr) {
   return { startTimeMs, endTimeMs, rangeIdentifier };
 }
 
-/** Fetches combined spectrogram history from Redis and DB */
+/** Fetches combined spectrogram history from Redis (individual records) and DB */
 async function fetchCombinedSpectrogramHistory(startTimeMs, endTimeMs, detectorId = null) {
   const queryId = `spec-${detectorId || 'all'}-${startTimeMs}-${endTimeMs}`;
   logger.debug(`[${queryId}] Fetching combined spectrogram history...`);
@@ -108,7 +103,6 @@ async function fetchCombinedSpectrogramHistory(startTimeMs, endTimeMs, detectorI
   let redisResults = [];
   let dbResults = [];
   const redisStartTimeMs = Math.max(startTimeMs, redisBoundaryMs);
-  // Get client instance inside function
   const streamRedisClient = getStreamRedisClient();
 
   // --- Fetch from Redis ---
@@ -121,44 +115,48 @@ async function fetchCombinedSpectrogramHistory(startTimeMs, endTimeMs, detectorI
       if (historyKeys.length > 0) {
         const fetchPromises = historyKeys.map((key) => streamRedisClient.lrange(key, 0, -1));
         const allRecordsNested = await Promise.all(fetchPromises);
-        const allRecords = allRecordsNested.flat();
+        const allRecordStrings = allRecordsNested.flat();
 
-        redisResults = allRecords
-          .map((r) => {
+        redisResults = allRecordStrings
+          .map((recordStr) => {
             try {
-              const parsed = JSON.parse(r);
-              if (!parsed?.timestamp) return null;
+              const parsed = JSON.parse(recordStr);
+              // Updated validation for individual spectrum records
+              if (
+                !parsed?.timestamp ||
+                !parsed.detectorId ||
+                !parsed.location ||
+                !Array.isArray(parsed.spectrogram) ||
+                !parsed.processingResults?.[0] // Expecting single result now
+              ) {
+                return null;
+              }
               const t = new Date(parsed.timestamp).getTime();
+              // Filter by time range
               if (t < redisStartTimeMs || t > endTimeMs) return null;
+              // Filter by detectorId if specified
               if (detectorId && parsed.detectorId !== detectorId) return null;
 
-              const resultsArray = Array.isArray(parsed.processingResults)
-                ? parsed.processingResults
-                : [];
-              const downsampledBatch = Array.isArray(parsed.spectrogram) ? parsed.spectrogram : [];
-
-              return downsampledBatch.map((specData, index) => {
-                const procResult = resultsArray[index] || {
-                  transientInfo: { type: 'none', details: null },
-                };
-                return {
-                  detectorId: parsed.detectorId,
-                  ts: t,
-                  location: parsed.location,
-                  spectrogram: specData || [],
-                  transientInfo: procResult.transientInfo || { type: 'none', details: null },
-                };
-              });
+              // Format matches the desired output directly
+              return {
+                detectorId: parsed.detectorId,
+                ts: t,
+                location: parsed.location,
+                spectrogram: parsed.spectrogram, // The single downsampled array
+                transientInfo: parsed.processingResults[0].transientInfo || {
+                  type: 'none',
+                  details: null,
+                },
+              };
             } catch (e) {
               logger.warn(`[${queryId}] Failed to parse spectrogram record from Redis`, {
                 key: 'N/A',
-                recordStart: r?.substring(0, 50),
+                recordStart: recordStr?.substring(0, 50),
                 error: e.message,
               });
               return null;
             }
           })
-          .flat()
           .filter((r) => r !== null);
 
         logger.debug(
@@ -257,7 +255,6 @@ async function fetchCombinedPeakHistory(startTimeMs, endTimeMs, detectorId = nul
   let redisPeakResults = [];
   let dbPeakResults = [];
   const redisStartTimeMs = Math.max(startTimeMs, redisBoundaryMs);
-  // Get client instance inside function
   const streamRedisClient = getStreamRedisClient();
 
   // --- Fetch from Redis ---
@@ -375,29 +372,24 @@ async function fetchCombinedPeakHistory(startTimeMs, endTimeMs, detectorId = nul
 // GET /history/hours/:hours
 router.get(
   '/hours/:hours',
-  authenticateToken, // Apply JWT authentication
+  authenticateToken,
   historyHoursValidationRules,
-  validateRequest, // Handle validation errors
+  validateRequest,
   async (req, res, next) => {
     const hours = parseInt(req.params.hours, 10);
     const { detectorId } = req.query;
-    const username = req.user.username; // Available from authenticateToken middleware
+    const username = req.user.username;
     const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(hours, null, null);
-    // Construct cache key
-    const cacheKey = `${REDIS_HISTORY_CACHE_PREFIX}spec_struct_v2:${rangeIdentifier}:${detectorId || 'all'}`;
-    // Get client instance inside handler
+    const cacheKey = `${REDIS_HISTORY_CACHE_PREFIX}spec_struct_v2:${rangeIdentifier}:${detectorId || 'all'}`; // Use corrected interpolation
     const streamRedisClient = getStreamRedisClient();
 
     try {
-      // Check cache first
       const cached = await streamRedisClient.get(cacheKey);
       if (cached) {
         logger.info('Serving structured spec history from cache (hours)', { cacheKey, username });
-        // Send cached data directly (assuming it's stored as JSON string)
         return res.contentType('application/json').send(cached);
       }
 
-      // Cache miss, fetch from storage
       logger.info('Fetching structured spec history from storage (hours)', {
         cacheKey,
         hours,
@@ -406,9 +398,7 @@ router.get(
       });
       const finalResult = await fetchCombinedSpectrogramHistory(startTimeMs, endTimeMs, detectorId);
 
-      // Cache the result if data was found
       if (finalResult.length > 0) {
-        // Cache result for 5 minutes (300 seconds)
         await streamRedisClient.setex(cacheKey, 300, JSON.stringify(finalResult));
         logger.info('Cached structured spec historical data (hours)', { cacheKey });
       } else {
@@ -422,7 +412,7 @@ router.get(
         detectorId,
         error: err.message,
       });
-      next(err); // Pass to centralized error handler
+      next(err);
     }
   }
 );
@@ -437,8 +427,7 @@ router.get(
     const { startTime, endTime, detectorId } = req.query;
     const username = req.user.username;
     const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(null, startTime, endTime);
-    const cacheKey = `${REDIS_HISTORY_CACHE_PREFIX}spec_struct_v2:${rangeIdentifier}:${detectorId || 'all'}`;
-    // Get client instance inside handler
+    const cacheKey = `${REDIS_HISTORY_CACHE_PREFIX}spec_struct_v2:${rangeIdentifier}:${detectorId || 'all'}`; // Corrected interpolation
     const streamRedisClient = getStreamRedisClient();
 
     try {
@@ -488,8 +477,7 @@ router.get(
     const { detectorId } = req.query;
     const username = req.user.username;
     const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(hours, null, null);
-    const cacheKey = `${REDIS_HISTORY_CACHE_PREFIX}peaks:${rangeIdentifier}:${detectorId || 'all'}`;
-    // Get client instance inside handler
+    const cacheKey = `${REDIS_HISTORY_CACHE_PREFIX}peaks:${rangeIdentifier}:${detectorId || 'all'}`; // Corrected interpolation
     const streamRedisClient = getStreamRedisClient();
 
     try {
@@ -534,8 +522,7 @@ router.get(
     const { startTime, endTime, detectorId } = req.query;
     const username = req.user.username;
     const { startTimeMs, endTimeMs, rangeIdentifier } = getQueryTimeRange(null, startTime, endTime);
-    const cacheKey = `${REDIS_HISTORY_CACHE_PREFIX}peaks:${rangeIdentifier}:${detectorId || 'all'}`;
-    // Get client instance inside handler
+    const cacheKey = `${REDIS_HISTORY_CACHE_PREFIX}peaks:${rangeIdentifier}:${detectorId || 'all'}`; // Corrected interpolation
     const streamRedisClient = getStreamRedisClient();
 
     try {

@@ -2,7 +2,7 @@
 /**
  * Detector module to generate and publish simulated spectrogram data to Redis streams.
  * Includes enhanced simulation features: diurnal variation, randomized parameters, Q-bursts.
- * v1.1.10 - Linter Fixes (unused imports).
+ * v1.1.28 - Linter Fixes (unused imports). Batch size fixed to 1. No backslash escapes in template literals.
  */
 require('dotenv').config(); // Load .env file if present
 const Redis = require('ioredis');
@@ -14,13 +14,13 @@ const {
   REDIS_PORT,
   REDIS_PASSWORD,
   INTERVAL_MS,
-  DETECTOR_BATCH_SIZE,
-  DETECTOR_ID: CFG_DETECTOR_ID, // Use CFG_ prefix to avoid local redeclaration if needed
+  DETECTOR_BATCH_SIZE, // This is now fixed to 1 in constants.js
+  DETECTOR_ID: CFG_DETECTOR_ID,
   LATITUDE: CFG_LATITUDE,
   LONGITUDE: CFG_LONGITUDE,
   LOG_LEVEL,
   REDIS_CONNECT_TIMEOUT_MS,
-  RAW_FREQUENCY_POINTS, // MAX_FREQUENCY_HZ, HZ_PER_POINT, // <= REMOVED THESE UNUSED IMPORTS
+  RAW_FREQUENCY_POINTS,
   POINTS_PER_HZ,
   SCHUMANN_FREQUENCIES,
   BASE_NOISE_LEVEL,
@@ -44,41 +44,38 @@ const {
 const DETECTOR_ID = CFG_DETECTOR_ID;
 let LATITUDE = CFG_LATITUDE;
 let LONGITUDE = CFG_LONGITUDE;
+const BATCH_SIZE = DETECTOR_BATCH_SIZE; // Use the constant (fixed at 1)
 
 // --- Logger Setup ---
-// Use LOG_LEVEL from constants
 const logger = winston.createLogger({
   level: LOG_LEVEL,
   format: winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.errors({ stack: true }), // Include stack traces in logs
+    winston.format.errors({ stack: true }),
     winston.format.splat(),
-    winston.format.json() // Log in JSON format to file
+    winston.format.json()
   ),
   transports: [
     new winston.transports.Console({
       format: winston.format.combine(winston.format.colorize(), winston.format.simple()),
     }),
-    // Use DETECTOR_ID constant in filename
     new winston.transports.File({
-      filename: `detector-${DETECTOR_ID}.log`,
-      maxsize: 5242880, // 5MB
+      filename: `detector-${DETECTOR_ID}.log`, // Corrected interpolation
+      maxsize: 5242880,
       maxFiles: 3,
     }),
   ],
 });
 
-logger.info(`Starting detector ${DETECTOR_ID}... Log level: ${LOG_LEVEL}`);
+logger.info(`Starting detector ${DETECTOR_ID}... Log level: ${LOG_LEVEL}`); // Corrected interpolation
 
 // --- Configuration Validation ---
 if (!REDIS_HOST || !REDIS_PORT || !REDIS_PASSWORD) {
   logger.error(
     'FATAL: Redis configuration missing (REDIS_HOST, REDIS_PORT, REDIS_PASSWORD). Exiting.'
   );
-  // Throw error instead of process.exit(1)
   throw new Error('Redis configuration missing.');
 }
-// Handle potentially invalid LAT/LON from constants/env
 if (
   isNaN(LATITUDE) ||
   isNaN(LONGITUDE) ||
@@ -88,131 +85,118 @@ if (
   LONGITUDE > 180
 ) {
   logger.warn(
-    `Invalid/missing LAT/LON (${LATITUDE}, ${LONGITUDE}). Generating random coordinates for ${DETECTOR_ID}.`
+    `Invalid/missing LAT/LON (${LATITUDE}, ${LONGITUDE}). Generating random coordinates for ${DETECTOR_ID}.` // Corrected interpolation
   );
-  LATITUDE = Math.random() * 180 - 90; // Random latitude between -90 and 90
-  LONGITUDE = Math.random() * 360 - 180; // Random longitude between -180 and 180
+  LATITUDE = Math.random() * 180 - 90;
+  LONGITUDE = Math.random() * 360 - 180;
 }
 if (INTERVAL_MS < 500) {
-  logger.warn(`Detector interval ${INTERVAL_MS}ms is very low. Ensure system can handle the load.`);
+  logger.warn(`Detector interval ${INTERVAL_MS}ms is very low. Ensure system can handle the load.`); // Corrected interpolation
 }
-// DETECTOR_BATCH_SIZE validation is now handled in constants.js
+// --- BATCH SIZE WARNING ---
+if (parseInt(process.env.DETECTOR_BATCH_SIZE, 10) > 1) {
+  logger.warn(
+    `DETECTOR_BATCH_SIZE environment variable is set > 1, but batch size is fixed to 1 internally for compatibility. Ignoring env var.`
+  );
+}
+// --- END BATCH SIZE WARNING ---
 
 // --- Redis Client Setup ---
 const redisClient = new Redis({
   host: REDIS_HOST,
   port: REDIS_PORT,
   password: REDIS_PASSWORD,
-  lazyConnect: true, // Connect explicitly in startDetector
+  lazyConnect: true,
   connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
   retryStrategy: (times) => {
-    const delay = Math.min(times * 150, 3000); // Use 150ms base, max 3s delay
+    const delay = Math.min(times * 150, 3000);
     logger.warn(
-      `Redis connection retry attempt ${times}. Retrying in ${delay}ms... (${DETECTOR_ID})`
+      `Redis connection retry attempt ${times}. Retrying in ${delay}ms... (${DETECTOR_ID})` // Corrected interpolation
     );
     return delay;
   },
   reconnectOnError: (err) => {
-    logger.error(`Redis reconnect triggered on error (${DETECTOR_ID})`, { error: err.message });
-    return true; // Attempt reconnect on all errors for simplicity
+    logger.error(`Redis reconnect triggered on error (${DETECTOR_ID})`, { error: err.message }); // Corrected interpolation
+    return true;
   },
-  maxRetriesPerRequest: 3, // Limit retries for commands after connection established
+  maxRetriesPerRequest: 3,
   showFriendlyErrorStack: process.env.NODE_ENV !== 'production',
 });
 
-// Attach Redis event listeners
 redisClient.on('error', (err) =>
-  logger.error(`Redis Client Error (${DETECTOR_ID})`, { error: err.message })
+  logger.error(`Redis Client Error (${DETECTOR_ID})`, { error: err.message }) // Corrected interpolation
 );
-redisClient.on('connect', () => logger.info(`Redis client connecting... (${DETECTOR_ID})`));
-redisClient.on('ready', () => logger.info(`Redis client ready. (${DETECTOR_ID})`));
-redisClient.on('close', () => logger.warn(`Redis client connection closed. (${DETECTOR_ID})`));
+redisClient.on('connect', () => logger.info(`Redis client connecting... (${DETECTOR_ID})`)); // Corrected interpolation
+redisClient.on('ready', () => logger.info(`Redis client ready. (${DETECTOR_ID})`)); // Corrected interpolation
+redisClient.on('close', () => logger.warn(`Redis client connection closed. (${DETECTOR_ID})`)); // Corrected interpolation
 redisClient.on('reconnecting', (delay) =>
-  logger.warn(`Redis client reconnecting (delay: ${delay}ms)... (${DETECTOR_ID})`)
+  logger.warn(`Redis client reconnecting (delay: ${delay}ms)... (${DETECTOR_ID})`) // Corrected interpolation
 );
 
 // --- Simulation Logic ---
-// Q-Burst State
-let activeQBursts = {}; // Format: { modeIndex: intervalsRemaining }
+let activeQBursts = {};
 
-/** Generates a single simulated raw spectrogram */
 function generateSpectrogram() {
   const spectrogram = new Array(RAW_FREQUENCY_POINTS).fill(0);
   const now = Date.now();
-
-  // Calculate diurnal amplitude modulation factor
   const timeOfDayFactor = Math.sin(
     (2 * Math.PI * (now % AMPLITUDE_CYCLE_DURATION_MS)) / AMPLITUDE_CYCLE_DURATION_MS - Math.PI / 2
-  ); // Ranges from -1 (night) to +1 (day peak)
+  );
   const amplitudeModulation = 1 + AMPLITUDE_VARIATION_FACTOR * timeOfDayFactor;
   const currentBaseAmplitude = BASE_AMPLITUDE * amplitudeModulation;
-  // Add some randomness and diurnal variation to noise level
   const currentNoiseLevel =
     BASE_NOISE_LEVEL * (0.8 + Math.random() * 0.4) * (1 + 0.2 * timeOfDayFactor);
 
-  // Add base noise
   for (let i = 0; i < RAW_FREQUENCY_POINTS; i++) {
     spectrogram[i] += Math.random() * currentNoiseLevel;
   }
 
-  // --- Q-Burst State Update ---
   const nextActiveQBursts = {};
   for (const modeIndexStr in activeQBursts) {
     const remaining = activeQBursts[modeIndexStr] - 1;
     if (remaining > 0) {
-      nextActiveQBursts[modeIndexStr] = remaining; // Keep burst active
+      nextActiveQBursts[modeIndexStr] = remaining;
     } else {
-      logger.info(`Q-Burst ended for SR mode index ${modeIndexStr} on ${DETECTOR_ID}`);
+      logger.info(`Q-Burst ended for SR mode index ${modeIndexStr} on ${DETECTOR_ID}`); // Corrected interpolation
     }
   }
   activeQBursts = nextActiveQBursts;
 
-  // Check for new Q-bursts triggering
   if (Math.random() < Q_BURST_PROBABILITY) {
-    // Select a mode index eligible for bursting
     const burstModeIndex =
       Q_BURST_MODE_INDICES[Math.floor(Math.random() * Q_BURST_MODE_INDICES.length)];
-    // Only start if the selected mode is not already bursting
     if (!activeQBursts[burstModeIndex]) {
       activeQBursts[burstModeIndex] = Q_BURST_DURATION_INTERVALS;
       logger.info(
-        `*** Q-Burst triggered for SR mode index ${burstModeIndex} on ${DETECTOR_ID} ***`
+        `*** Q-Burst triggered for SR mode index ${burstModeIndex} on ${DETECTOR_ID} ***` // Corrected interpolation
       );
     }
   }
 
-  // --- Add Schumann Resonance Peaks ---
   SCHUMANN_FREQUENCIES.forEach((baseFreq, index) => {
-    // Random frequency shift for this peak
     const freqShift = (Math.random() - 0.5) * 2 * FREQUENCY_SHIFT_MAX;
     const currentFreq = baseFreq + freqShift;
-    const centerIndex = Math.round(currentFreq * POINTS_PER_HZ); // Index in the raw spectrum
-
-    // Calculate amplitude for this mode (decreases for higher modes, random variation)
+    const centerIndex = Math.round(currentFreq * POINTS_PER_HZ);
     let modeAmplitude =
       currentBaseAmplitude *
       Math.pow(AMPLITUDE_DECREASE_FACTOR, index) *
       (0.9 + Math.random() * 0.2);
-
-    // Calculate peak sharpness (base + base fluctuation + random variation per generation)
     const currentBaseSharpness =
       PEAK_SHARPNESS_BASE_AVG + (Math.random() - 0.5) * 2 * PEAK_SHARPNESS_BASE_FLUCTUATION;
     let peakSharpness =
       currentBaseSharpness + (Math.random() - 0.5) * 2 * PEAK_SHARPNESS_RANDOM_VARIATION;
-    peakSharpness = Math.max(50, peakSharpness); // Ensure sharpness doesn't go too low (too wide)
+    peakSharpness = Math.max(50, peakSharpness);
 
-    // Apply Q-burst effect if active for this mode index
     if (activeQBursts[index]) {
-      modeAmplitude *= Q_BURST_AMP_MULTIPLIER; // Increase amplitude
-      peakSharpness /= Q_BURST_SHARPNESS_DIVISOR; // Decrease sharpness value (makes peak sharper)
-      peakSharpness = Math.max(20, peakSharpness); // Ensure burst sharpness doesn't go too low
-      logger.debug(`Applying Q-Burst effect to SR mode index ${index}`);
+      modeAmplitude *= Q_BURST_AMP_MULTIPLIER;
+      peakSharpness /= Q_BURST_SHARPNESS_DIVISOR;
+      peakSharpness = Math.max(20, peakSharpness);
+      logger.debug(`Applying Q-Burst effect to SR mode index ${index}`); // Corrected interpolation
     }
 
-    // Generate Gaussian peak shape around the center index
-    const peakWidthPoints = Math.round(Math.sqrt(peakSharpness) * 3); // Adjust multiplier as needed
+    const peakWidthPoints = Math.round(Math.sqrt(peakSharpness) * 3);
     const startIndex = Math.max(0, centerIndex - peakWidthPoints);
-    const endIndex = Math.min(RAW_FREQUENCY_POINTS, centerIndex + peakWidthPoints + 1); // +1 for loop end
+    const endIndex = Math.min(RAW_FREQUENCY_POINTS, centerIndex + peakWidthPoints + 1);
 
     for (let i = startIndex; i < endIndex; i++) {
       const distanceSq = (i - centerIndex) * (i - centerIndex);
@@ -220,7 +204,6 @@ function generateSpectrogram() {
     }
   });
 
-  // Ensure all values are non-negative
   for (let i = 0; i < RAW_FREQUENCY_POINTS; i++) {
     spectrogram[i] = Math.max(0, spectrogram[i]);
   }
@@ -229,51 +212,43 @@ function generateSpectrogram() {
 }
 
 // --- Publishing Logic ---
-let publishIntervalTimer = null; // Store timer ID for cleanup
+let publishIntervalTimer = null;
 
-/** Publishes a batch of generated spectrograms to Redis Stream */
 async function publishSpectrogramBatch() {
-  // Check Redis connection status before attempting to publish
   if (redisClient.status !== 'ready') {
     logger.warn(
-      `Redis not ready (status: ${redisClient.status}), skipping publish cycle for ${DETECTOR_ID}.`
+      `Redis not ready (status: ${redisClient.status}), skipping publish cycle for ${DETECTOR_ID}.` // Corrected interpolation
     );
     return;
   }
 
-  // Generate the batch of spectrograms
-  const batch = [];
-  for (let i = 0; i < DETECTOR_BATCH_SIZE; i++) {
-    batch.push(generateSpectrogram());
-  }
+  // --- BATCH SIZE FIXED TO 1 ---
+  const batch = [generateSpectrogram()]; // Generate exactly one spectrogram
+  // --- END BATCH SIZE FIX ---
 
-  // Prepare the message payload
   const message = {
-    spectrogram: batch,
+    spectrogram: batch, // Send array containing the single spectrum
     timestamp: new Date().toISOString(),
-    interval: INTERVAL_MS, // Include the simulation interval
+    interval: INTERVAL_MS,
     detectorId: DETECTOR_ID,
     location: { lat: LATITUDE, lon: LONGITUDE },
   };
   const messageString = JSON.stringify(message);
 
   try {
-    // Publish to the stream using XADD
     const messageId = await redisClient.xadd(REDIS_STREAM_KEY, '*', 'data', messageString);
-    logger.info(`Batch published successfully (${DETECTOR_ID})`, {
+    logger.info(`Published successfully (${DETECTOR_ID})`, { // Corrected interpolation
       messageId,
-      batchSize: batch.length,
+      batchSize: batch.length, // Will always be 1 now
     });
   } catch (err) {
-    logger.error(`Failed to publish batch to Redis stream (${DETECTOR_ID})`, {
+    logger.error(`Failed to publish to Redis stream (${DETECTOR_ID})`, { // Corrected interpolation
       error: err.message,
     });
-    // Optional: Attempt reconnect if error seems connection-related
     if (redisClient.status !== 'reconnecting' && redisClient.status !== 'connecting') {
-      logger.warn(`Attempting explicit Redis reconnect due to publish error (${DETECTOR_ID})`);
+      logger.warn(`Attempting explicit Redis reconnect due to publish error (${DETECTOR_ID})`); // Corrected interpolation
       redisClient.connect().catch((connectErr) => {
-        // Log additional error if explicit reconnect attempt fails
-        logger.error(`Explicit reconnect attempt failed (${DETECTOR_ID})`, {
+        logger.error(`Explicit reconnect attempt failed (${DETECTOR_ID})`, { // Corrected interpolation
           error: connectErr.message,
         });
       });
@@ -284,90 +259,75 @@ async function publishSpectrogramBatch() {
 // --- Startup Logic ---
 async function startDetector() {
   logger.info(
-    `Detector ${DETECTOR_ID} attempting to connect to Redis at ${REDIS_HOST}:${REDIS_PORT}...`
+    `Detector ${DETECTOR_ID} attempting to connect to Redis at ${REDIS_HOST}:${REDIS_PORT}...` // Corrected interpolation
   );
   try {
-    // Explicitly connect and wait for 'ready' or timeout/error
-    await redisClient.connect(); // connect() promise resolves after 'ready' or rejects on error/timeout
-
-    // If the promise resolved, we are connected and ready
+    await redisClient.connect();
     logger.info(
-      `Detector ${DETECTOR_ID} started successfully. Redis connection established. Publishing interval: ${INTERVAL_MS}ms, Batch Size: ${DETECTOR_BATCH_SIZE}.`,
+      `Detector ${DETECTOR_ID} started successfully. Redis connection established. Publishing interval: ${INTERVAL_MS}ms, Batch Size: ${BATCH_SIZE}.`, // Corrected interpolation
       { lat: LATITUDE.toFixed(4), lon: LONGITUDE.toFixed(4) }
     );
-    // Start the periodic publishing
     publishIntervalTimer = setInterval(publishSpectrogramBatch, INTERVAL_MS);
   } catch (err) {
-    // Log the error that caused connection failure (timeout or specific error)
     logger.error(
-      `Detector ${DETECTOR_ID} failed to start due to Redis connection error. Exiting.`,
+      `Detector ${DETECTOR_ID} failed to start due to Redis connection error. Exiting.`, // Corrected interpolation
       {
         error: err.message,
       }
     );
-    // Ensure disconnection attempt even on startup failure
     if (redisClient.status !== 'end') {
       redisClient.disconnect();
     }
-    // Throw error instead of process.exit(1)
-    throw new Error(`Detector ${DETECTOR_ID} failed to start: Redis connection error.`);
+    throw new Error(`Detector ${DETECTOR_ID} failed to start: Redis connection error.`); // Corrected interpolation
   }
 }
 
 // --- Shutdown Logic ---
 let shuttingDown = false;
 async function shutdownDetector(signal = 'UNKNOWN') {
-  // Add signal parameter
   if (shuttingDown) return;
   shuttingDown = true;
-  logger.info(`Received ${signal}. Shutting down detector ${DETECTOR_ID}...`);
-  process.exitCode = 0; // Default to success exit code
+  logger.info(`Received ${signal}. Shutting down detector ${DETECTOR_ID}...`); // Corrected interpolation
+  process.exitCode = 0;
 
-  // 1. Clear the interval timer to stop new publishes
   if (publishIntervalTimer) {
     clearInterval(publishIntervalTimer);
-    logger.debug(`Cleared publishing interval timer for ${DETECTOR_ID}.`);
+    logger.debug(`Cleared publishing interval timer for ${DETECTOR_ID}.`); // Corrected interpolation
   }
 
-  // 2. Close Redis connection gracefully
   try {
     if (
       redisClient.status !== 'end' &&
       redisClient.status !== 'closing' &&
       redisClient.status !== 'close'
     ) {
-      // Check status more carefully
-      logger.info(`Closing Redis connection for ${DETECTOR_ID} (Status: ${redisClient.status})...`);
+      logger.info(`Closing Redis connection for ${DETECTOR_ID} (Status: ${redisClient.status})...`); // Corrected interpolation
       await redisClient.quit();
-      logger.info(`Redis connection closed for ${DETECTOR_ID}.`);
+      logger.info(`Redis connection closed for ${DETECTOR_ID}.`); // Corrected interpolation
     } else {
-      logger.info(`Redis connection already closed or closing for ${DETECTOR_ID}.`);
+      logger.info(`Redis connection already closed or closing for ${DETECTOR_ID}.`); // Corrected interpolation
     }
   } catch (err) {
-    logger.error(`Error during Redis graceful shutdown for ${DETECTOR_ID}:`, {
+    logger.error(`Error during Redis graceful shutdown for ${DETECTOR_ID}:`, { // Corrected interpolation
       error: err.message,
     });
-    process.exitCode = 1; // Set error exit code
+    process.exitCode = 1;
   } finally {
-    logger.info(`Detector ${DETECTOR_ID} shutdown complete. Final exit code: ${process.exitCode}.`);
-    // Let Node exit naturally now that timers are cleared and connections closed
+    logger.info(`Detector ${DETECTOR_ID} shutdown complete. Final exit code: ${process.exitCode}.`); // Corrected interpolation
+    // Let Node exit naturally
   }
 }
 
 // --- Signal Handling ---
-// Listen for termination signals for graceful shutdown
 process.on('SIGINT', () => shutdownDetector('SIGINT'));
 process.on('SIGTERM', () => shutdownDetector('SIGTERM'));
 
 // --- Start the Detector ---
-// Use an async IIFE to handle potential startup errors
 (async () => {
   try {
     await startDetector();
-    logger.info(`Detector ${DETECTOR_ID} running.`);
+    logger.info(`Detector ${DETECTOR_ID} running.`); // Corrected interpolation
   } catch (startupError) {
-    // Startup error is already logged in startDetector
-    process.exitCode = 1; // Ensure exit code reflects startup failure
-    // Allow process to exit naturally with the failure code
+    process.exitCode = 1;
   }
-})(); // Immediately invoke the async function
+})();

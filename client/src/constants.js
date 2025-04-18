@@ -4,47 +4,47 @@
  */
 
 // --- Environment Variables ---
-// Access REACT_APP_* variables directly (injected by Create React App build process)
-// Provide fallback defaults for development when .env might not be set or during tests
 const REACT_APP_API_BASE_URL = window.REACT_APP_API_BASE_URL || 'http://localhost:3000';
 const REACT_APP_WS_URL = window.REACT_APP_WS_URL || 'ws://localhost:3000';
-// ^^^ Note: Accessing directly or via `window.` might not work reliably depending
-// on CRA version and context. The standard way CRA makes these available is
-// simply by referencing the variable name directly IF the code consuming this
-// constant file is part of the CRA build process.
 
-// Let's try the direct reference method, which is standard for CRA:
-// If this still fails, it indicates an issue with the build process or environment setup.
-const API_URL_FROM_ENV = REACT_APP_API_BASE_URL; // Direct reference
-const WS_URL_FROM_ENV = REACT_APP_WS_URL; // Direct reference
+const API_URL_FROM_ENV = REACT_APP_API_BASE_URL;
+const WS_URL_FROM_ENV = REACT_APP_WS_URL;
 
-// API and WebSocket URLs
 export const DEFAULT_API_BASE_URL = API_URL_FROM_ENV;
 export const DEFAULT_WS_URL = WS_URL_FROM_ENV;
-// Fallbacks remain hardcoded as they are used if the default fails the health check
 export const FALLBACK_API_BASE_URL = 'http://localhost:3000';
 export const FALLBACK_WS_URL = 'ws://localhost:3000';
 
 // --- Layout Constants ---
 export const DRAWER_WIDTH = 300;
-export const MAIN_CONTENT_MARGIN = 20;
-export const DEFAULT_APP_BAR_HEIGHT = 64; // Initial guess
+export const MAIN_CONTENT_MARGIN = 16; // Reduced slightly for more plot space
+export const DEFAULT_APP_BAR_HEIGHT = 64;
 
 // --- Visualization Defaults & Options ---
-export const DEFAULT_TIME_STEPS = 45; // Corresponds to 45 * 5 = 225 seconds initially
-export const DEFAULT_COLOR_SCALE = 'Viridis';
-export const DEFAULT_PLOT_TYPE = '3d'; // '2d' or '3d'
+export const DEFAULT_TIME_STEPS = 45;
+export const DEFAULT_COLOR_SCALE = 'Viridis'; // Changed default from Jet to Viridis
+export const DEFAULT_PLOT_TYPE = '3d';
 export const DEFAULT_NORMALIZE = false;
 export const DEFAULT_HISTORICAL_HOURS = 1;
 export const DEFAULT_SELECTED_DETECTOR = 'all';
 
-export const PLOT_COLOR_SCALES = ['Jet', 'Greys', 'Viridis', 'Plasma'];
+export const PLOT_COLOR_SCALES = ['Viridis', 'Plasma', 'Jet', 'Greys']; // Put perceptually uniform first
 
 // --- Spectrogram Data Dimensions ---
-export const RAW_FREQUENCY_POINTS = 5501; // Original points before downsampling
-export const DOWNSAMPLE_FACTOR = 5; // Assumed factor matching server default
+export const RAW_FREQUENCY_POINTS = 5501;
+export const DOWNSAMPLE_FACTOR = 5;
 export const EXPECTED_DOWNSAMPLED_POINTS = Math.ceil(RAW_FREQUENCY_POINTS / DOWNSAMPLE_FACTOR);
 export const SPECTROGRAM_FREQUENCY_MAX_HZ = 55;
+
+// --- Schumann Resonance Mode Definitions ---
+export const SCHUMANN_MODE_RANGES = {
+  'Mode 1 (7.8Hz)': { min: 6.5, max: 9.5 },
+  'Mode 2 (14Hz)': { min: 12.5, max: 16.5 },
+  'Mode 3 (21Hz)': { min: 18.5, max: 23.5 },
+  'Mode 4 (27Hz)': { min: 24.5, max: 30.5 },
+  'Mode 5 (34Hz)': { min: 31.5, max: 36.5 },
+};
+export const SCHUMANN_FUNDAMENTALS = [7.83, 14.3, 20.8, 27.3, 33.8];
 
 // --- WebSocket Status Enum ---
 export const WebSocketStatusEnum = {

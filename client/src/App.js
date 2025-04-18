@@ -3,11 +3,13 @@
  * Main application component for EarthSync client (v1.1.28 - Final Linter Fixes).
  * Handles authentication, theme toggling, and renders the main page layout.
  * Delegates drawer content to ControlsDrawer and main plot area to MainContent.
+ * Filters Peak Info display to show only SR modes. Handles auth errors via logout.
+ * Fixes heatmap time direction and adds axis titles. Implements UI polish.
  * Uses useWebSocket and useApiClient hooks for logic encapsulation.
- * Uses centralized constants.
+ * Uses centralized constants. No backslash escapes in template literals.
  */
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import PropTypes from 'prop-types'; // Import PropTypes
+import PropTypes from 'prop-types';
 import axios from 'axios';
 import debounce from 'lodash.debounce';
 import {
@@ -25,8 +27,8 @@ import {
   LinearProgress,
   useTheme,
   FormControl,
-  FormLabel, // Keep for Auth form
-  Tooltip, // Keep for TransientIndicator
+  FormLabel,
+  Tooltip,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -67,7 +69,9 @@ import {
   SPECTROGRAM_FREQUENCY_MAX_HZ,
   SLIDER_DEBOUNCE_MS,
   HEALTH_CHECK_TIMEOUT_MS,
-} from './constants'; // Import constants
+  TRANSIENT_INDICATOR_TIMEOUT_MS,
+  SCHUMANN_MODE_RANGES,
+} from './constants';
 
 // Import Child Components
 import ControlsDrawer from './components/ControlsDrawer';
@@ -85,7 +89,6 @@ const getLocalStorage = (key, defaultValue, parseJson = true) => {
     }
     return parseJson ? JSON.parse(saved) : saved;
   } catch (error) {
-    // Keep console.error for actual errors
     console.error(`Error reading localStorage key "${key}":`, error);
     return defaultValue;
   }
@@ -95,19 +98,16 @@ const getLocalStorage = (key, defaultValue, parseJson = true) => {
 async function determineServerUrls(defaultApiUrl, defaultWsUrl) {
   try {
     await axios.get(`${defaultApiUrl}/health`, { timeout: HEALTH_CHECK_TIMEOUT_MS });
-    // console.debug(`Using default server URLs: API=${defaultApiUrl}, WS=${defaultWsUrl}`); // Removed
     return { apiUrl: defaultApiUrl, wsUrl: defaultWsUrl };
   } catch (err) {
     console.warn(
       `Default server URL (${defaultApiUrl}) not reachable: ${err.message}. Trying fallback...`
-    ); // Keep warn for connectivity issues
+    );
     try {
       await axios.get(`${FALLBACK_API_BASE_URL}/health`, { timeout: HEALTH_CHECK_TIMEOUT_MS });
-      // console.debug(`Using fallback server URLs: API=${FALLBACK_API_BASE_URL}, WS=${FALLBACK_WS_URL}`); // Removed
       return { apiUrl: FALLBACK_API_BASE_URL, wsUrl: FALLBACK_WS_URL };
     } catch (fallbackErr) {
       console.error(
-        // Keep error
         `Fallback server URL (${FALLBACK_API_BASE_URL}) also not reachable: ${fallbackErr.message}.`
       );
       return {
@@ -198,16 +198,14 @@ function App() {
     try {
       const response = await axios.post(url, { username, password });
       if (action === 'register') {
-        // console.debug('Registration successful:', response.data); // Removed
         setIsRegistering(false);
         setAuthError('Registration successful! Please log in.');
       } else {
-        // console.debug('Login successful:', response.data); // Removed
         localStorage.setItem(LS_KEY_AUTH_TOKEN, response.data.token);
         setToken(response.data.token);
       }
     } catch (err) {
-      console.error(`${action} failed:`, err); // Keep error
+      console.error(`${action} failed:`, err);
       let message = err.message;
       if (err.response) {
         message =
@@ -222,10 +220,10 @@ function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     localStorage.removeItem(LS_KEY_AUTH_TOKEN);
     setToken(null);
-  };
+  }, []);
 
   // --- Conditional Rendering ---
   if (isLoading && !serverUrls) {
@@ -464,7 +462,6 @@ TransientIndicator.propTypes = {
 
 // --- Spectrogram Page Component (Main authenticated view) ---
 const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, apiUrl, wsUrl }) => {
-  // --- State Management ---
   const [spectrogramData, setSpectrogramData] = useState({});
   const [detectorActivity, setDetectorActivity] = useState({});
   const [peakData, setPeakData] = useState({});
@@ -474,7 +471,6 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
   const [lastTransientInfo, setLastTransientInfo] = useState(null);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
-  // Control State
   const [timeSteps, setTimeSteps] = useState(() =>
     getLocalStorage(LS_KEY_TIME_STEPS, DEFAULT_TIME_STEPS)
   );
@@ -494,12 +490,10 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     getLocalStorage(LS_KEY_PLOT_TYPE, DEFAULT_PLOT_TYPE)
   );
 
-  // Refs
   const appBarRef = useRef(null);
   const theme = useTheme();
   const historicalModeRef = useRef(historicalMode);
 
-  // --- Stable State Setters ---
   const stableSetTimeSteps = useCallback((val) => setTimeSteps(val), []);
   const stableSetSpectrogramData = useCallback((val) => setSpectrogramData(val), []);
   const stableSetDetectorActivity = useCallback((val) => setDetectorActivity(val), []);
@@ -511,14 +505,12 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
   const stableSetPlotType = useCallback((val) => setPlotType(val), []);
   const stableSetLastTransientInfo = useCallback((val) => setLastTransientInfo(val), []);
 
-  // --- Snackbar Handler ---
   const showSnackbar = useCallback((message, severity = 'error') => {
     setAppError(message);
     setSnackbarSeverity(severity);
     setSnackbarOpen(true);
   }, []);
 
-  // --- Custom Hooks ---
   const {
     encryptionKey,
     isLoadingKey,
@@ -528,6 +520,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     historicalActivity,
     historicalTransients,
     isLoadingHistory,
+    authenticationErrorOccurred,
   } = useApiClient(apiUrl, token, showSnackbar);
 
   const wsStatus = useWebSocket(
@@ -542,7 +535,13 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     showSnackbar
   );
 
-  // --- Effects ---
+  useEffect(() => {
+    if (authenticationErrorOccurred) {
+      console.warn('Authentication error detected by API client, logging out.');
+      onLogout();
+    }
+  }, [authenticationErrorOccurred, onLogout]);
+
   useEffect(() => {
     historicalModeRef.current = historicalMode;
   }, [historicalMode]);
@@ -565,7 +564,6 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     localStorage.setItem(LS_KEY_PLOT_TYPE, JSON.stringify(plotType));
   }, [plotType]);
 
-  // Measure AppBar Height
   const [appBarHeight, setAppBarHeight] = useState(DEFAULT_APP_BAR_HEIGHT);
   useEffect(() => {
     if (appBarRef.current) {
@@ -577,14 +575,21 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     }
   }, []);
 
-  // --- Data Selection Logic ---
   const displaySpectrogramData = historicalMode ? historicalSpectrograms : spectrogramData;
   const displayDetectorActivity = historicalMode ? historicalActivity : detectorActivity;
   const displayHistoricalPeaks = historicalMode ? historicalPeaks : null;
   const displayHistoricalTransients = historicalMode ? historicalTransients : [];
 
-  // --- Memoized Plot Data & Layout Calculation ---
-  const { xLabels, yLabels, displayData, minAmplitude, maxAmplitude, timestamps } = useMemo(() => {
+  const {
+    xLabels,
+    yLabels,
+    displayData,
+    minAmplitude,
+    maxAmplitude,
+    timestamps,
+    xLabelsHeatmap,
+    timestampsHeatmap,
+  } = useMemo(() => {
     const numPoints = EXPECTED_DOWNSAMPLED_POINTS;
     const calculatedXLabels = Array.from(
       { length: numPoints },
@@ -595,13 +600,14 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     let sourceRows = [];
 
     if (historicalMode) {
-      sourceRows =
+      const historyData =
         selectedDetector === 'all'
           ? Object.values(displaySpectrogramData).flatMap((det) => det.dataPoints || [])
           : displaySpectrogramData[selectedDetector]?.dataPoints || [];
-      sourceRows.sort((a, b) => a.ts - b.ts);
-      sourceDataPoints = sourceRows;
-      sourceRows = sourceRows.map((dp) => dp.spectrogram || []);
+
+      historyData.sort((a, b) => a.ts - b.ts);
+      sourceDataPoints = historyData;
+      sourceRows = historyData.map((dp) => dp.spectrogram || []);
     } else {
       sourceRows =
         selectedDetector === 'all'
@@ -633,8 +639,10 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
         ? [...Array(timeSteps - finalRows.length).fill(Array(numPoints).fill(0)), ...finalRows]
         : finalRows;
 
-    const calculatedYLabels = [];
-    const calculatedTimestamps = [];
+    const yLabels_reversed = [];
+    const timestamps_reversed = [];
+    const yLabels_unreversed = [];
+    const timestamps_unreversed = [];
     const nowMs = Date.now();
     const approxIntervalMs = 5000;
 
@@ -656,11 +664,13 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
         label = secondsAgo === 0 ? 'Now' : `-${secondsAgo}s`;
         timestamp = nowMs - rowIndex * approxIntervalMs;
       }
-      calculatedYLabels.push(label);
-      calculatedTimestamps.push(timestamp);
+      yLabels_unreversed.push(label);
+      timestamps_unreversed.push(timestamp);
     }
-    calculatedYLabels.reverse();
-    calculatedTimestamps.reverse();
+    yLabels_reversed.push(...yLabels_unreversed);
+    yLabels_reversed.reverse();
+    timestamps_reversed.push(...timestamps_unreversed);
+    timestamps_reversed.reverse();
 
     const normalizeFn = (data) => {
       const vals = data.flat().filter((v) => typeof v === 'number' && !isNaN(v));
@@ -687,15 +697,16 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
 
     return {
       xLabels: calculatedXLabels,
-      yLabels: calculatedYLabels,
+      yLabels: yLabels_reversed,
       displayData: finalDisplayData,
       minAmplitude: calculatedMinAmplitude,
       maxAmplitude: calculatedMaxAmplitude,
-      timestamps: calculatedTimestamps,
+      timestamps: timestamps_reversed,
+      xLabelsHeatmap: yLabels_unreversed,
+      timestampsHeatmap: timestamps_unreversed,
     };
   }, [displaySpectrogramData, selectedDetector, timeSteps, normalize, historicalMode]);
 
-  // --- Memoize Plotly data and layout ---
   const plotData = useMemo(() => {
     if (
       !displayData ||
@@ -705,8 +716,8 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     ) {
       return [];
     }
-    const basePlot = {
-      z: displayData,
+
+    const commonPlotProps = {
       colorscale: colorScale,
       showscale: true,
       colorbar: {
@@ -717,26 +728,35 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
       },
       zmin: minAmplitude,
       zmax: maxAmplitude,
-      customdata: timestamps?.length === displayData.length ? timestamps : undefined,
-      hovertemplate:
-        plotType === '2d'
-          ? `<b>Frequency:</b> %{y:.2f} Hz<br><b>Time:</b> %{x}<br><b>Amplitude:</b> %{z:.2f}<br><b>Timestamp:</b> %{customdata|%Y-%m-%d %H:%M:%S}<extra></extra>`
-          : `<b>Frequency:</b> %{x:.2f} Hz<br><b>Time:</b> %{y}<br><b>Amplitude:</b> %{z:.2f}<br><b>Timestamp:</b> %{customdata|%Y-%m-%d %H:%M:%S}<extra></extra>`,
-      hoverinfo: 'none',
     };
+
     if (plotType === '2d') {
       const transposedZ = displayData[0].map((_, colIndex) =>
         displayData.map((row) => row[colIndex])
       );
-      return [{ ...basePlot, x: yLabels, y: xLabels, z: transposedZ, type: 'heatmapgl' }];
+      return [
+        {
+          ...commonPlotProps,
+          x: xLabelsHeatmap,
+          y: xLabels,
+          z: transposedZ,
+          type: 'heatmapgl',
+          customdata: timestampsHeatmap,
+          hovertemplate: `<b>Frequency:</b> %{y:.2f} Hz<br><b>Time:</b> %{x}<br><b>Amplitude:</b> %{z:.2f}<br><b>Timestamp:</b> %{customdata|%Y-%m-%d %H:%M:%S}<extra></extra>`,
+          hoverinfo: 'none',
+        },
+      ];
     } else {
       return [
         {
-          ...basePlot,
+          ...commonPlotProps,
           x: xLabels,
           y: yLabels,
           z: displayData,
           type: 'surface',
+          customdata: timestamps,
+          hovertemplate: `<b>Frequency:</b> %{x:.2f} Hz<br><b>Time:</b> %{y}<br><b>Amplitude:</b> %{z:.2f}<br><b>Timestamp:</b> %{customdata|%Y-%m-%d %H:%M:%S}<extra></extra>`,
+          hoverinfo: 'none',
           contours: {
             z: { show: true, usecolormap: true, highlightcolor: '#42f462', project: { z: true } },
           },
@@ -749,36 +769,48 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     displayData,
     xLabels,
     yLabels,
+    xLabelsHeatmap,
+    timestamps,
+    timestampsHeatmap,
     colorScale,
     darkMode,
     minAmplitude,
     maxAmplitude,
     plotType,
-    timestamps,
   ]);
 
   const layout = useMemo(() => {
-    const yTickIndices = Array.isArray(yLabels)
-      ? yLabels
+    const freqLabels = xLabels;
+    const timeLabels = plotType === '2d' ? xLabelsHeatmap : yLabels;
+
+    const timeTickIndices = Array.isArray(timeLabels)
+      ? timeLabels
           .map((_, i) => i)
-          .filter((_, i) => i % Math.max(1, Math.floor(yLabels.length / 10)) === 0)
+          .filter((_, i) => i % Math.max(1, Math.floor(timeLabels.length / 10)) === 0)
       : [];
-    const safeYTickVals = yTickIndices.map((i) => yLabels[i]);
-    const safeYTickText = yTickIndices.map((i) => yLabels[i]);
-    const xTickIndices = Array.isArray(xLabels)
-      ? xLabels
+    const safeTimeTickVals = timeTickIndices.map((i) => timeLabels[i]);
+    const safeTimeTickText = timeTickIndices.map((i) => timeLabels[i]);
+
+    const freqTickIndices = Array.isArray(freqLabels)
+      ? freqLabels
           .map((_, i) => i)
-          .filter((_, i) => i % Math.max(1, Math.floor(xLabels.length / 10)) === 0)
+          .filter((_, i) => i % Math.max(1, Math.floor(freqLabels.length / 10)) === 0)
       : [];
-    const safeXTickVals = xTickIndices.map((i) => xLabels[i]);
-    const safeXTickText = xTickIndices.map((i) => xLabels[i]?.toFixed(1));
+    const safeFreqTickVals = freqTickIndices.map((i) => freqLabels[i]);
+    const safeFreqTickText = freqTickIndices.map((i) =>
+      typeof freqLabels[i] === 'number' ? freqLabels[i].toFixed(1) : String(freqLabels[i] ?? '')
+    );
+
     const baseLayout = {
       title: {
         text: `Schumann Resonance ${selectedDetector === 'all' ? '(All Detectors)' : `(${selectedDetector})`} ${historicalMode ? `(Past ${historicalHours}h)` : '(Real-time)'} (${plotType === '2d' ? '2D Heatmap' : '3D Surface'})`,
         font: { size: 16, color: darkMode ? '#ffffff' : '#000000' },
         y: 0.98,
+        x: 0.5,
+        xanchor: 'center',
+        yanchor: 'top',
       },
-      margin: { t: 40, r: MAIN_CONTENT_MARGIN, b: 60, l: 60 },
+      margin: { t: 60, r: 20, b: 70, l: 70 }, // Adjusted margins for titles
       autosize: true,
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor: 'rgba(0,0,0,0)',
@@ -788,23 +820,28 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     if (plotType === '2d') {
       return {
         ...baseLayout,
-        xaxis: {
-          title: { text: 'Time', font: { size: 12, color: darkMode ? '#ffffff' : '#000000' } },
-          tickvals: safeYTickVals,
-          ticktext: safeYTickText,
+        xaxis: { // TIME AXIS
+          title: { // Use explicit title object
+            text: 'Time',
+            font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
+          },
+          tickvals: safeTimeTickVals,
+          ticktext: safeTimeTickText,
           tickfont: { size: 10, color: darkMode ? '#ffffff' : '#000000' },
           gridcolor: darkMode ? '#555555' : '#d3d3d3',
+          automargin: true, // Use automargin
         },
-        yaxis: {
-          title: {
+        yaxis: { // FREQUENCY AXIS
+          title: { // Use explicit title object
             text: 'Frequency (Hz)',
-            font: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
+            font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
           },
-          tickvals: safeXTickVals,
-          ticktext: safeXTickText,
+          tickvals: safeFreqTickVals,
+          ticktext: safeFreqTickText,
           tickfont: { size: 10, color: darkMode ? '#ffffff' : '#000000' },
           gridcolor: darkMode ? '#555555' : '#d3d3d3',
           range: [0, SPECTROGRAM_FREQUENCY_MAX_HZ],
+          automargin: true, // Use automargin
         },
         modebar: {
           orientation: 'h',
@@ -813,37 +850,41 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
           activecolor: theme.palette.primary.main,
         },
       };
-    } else {
+    } else { // 3D Surface
+      baseLayout.margin = { t: 50, r: 10, b: 10, l: 10 };
       return {
         ...baseLayout,
         scene: {
-          xaxis: {
+          xaxis: { // FREQUENCY AXIS
             title: {
-              text: 'Frequency (Hz)',
-              font: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
+                text: 'Frequency (Hz)',
+                font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
             },
-            tickvals: safeXTickVals,
-            ticktext: safeXTickText,
+            tickvals: safeFreqTickVals,
+            ticktext: safeFreqTickText,
             tickfont: { size: 10, color: darkMode ? '#ffffff' : '#000000' },
             gridcolor: darkMode ? '#555555' : '#d3d3d3',
             zerolinecolor: darkMode ? '#aaaaaa' : '#000000',
             backgroundcolor: 'rgba(0,0,0,0)',
             range: [0, SPECTROGRAM_FREQUENCY_MAX_HZ],
           },
-          yaxis: {
-            title: { text: 'Time', font: { size: 12, color: darkMode ? '#ffffff' : '#000000' } },
-            tickvals: safeYTickVals,
-            ticktext: safeYTickText,
+          yaxis: { // TIME AXIS
+            title: {
+                text: 'Time',
+                font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
+            },
+            tickvals: safeTimeTickVals,
+            ticktext: safeTimeTickText,
             tickfont: { size: 10, color: darkMode ? '#ffffff' : '#000000' },
             gridcolor: darkMode ? '#555555' : '#d3d3d3',
             zerolinecolor: darkMode ? '#aaaaaa' : '#000000',
             backgroundcolor: 'rgba(0,0,0,0)',
             autorange: 'reversed',
           },
-          zaxis: {
+          zaxis: { // AMPLITUDE AXIS
             title: {
-              text: 'Amplitude',
-              font: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
+                text: 'Amplitude',
+                font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
             },
             tickfont: { size: 10, color: darkMode ? '#ffffff' : '#000000' },
             range: [minAmplitude, maxAmplitude],
@@ -868,6 +909,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     maxAmplitude,
     yLabels,
     xLabels,
+    xLabelsHeatmap,
     selectedDetector,
     historicalMode,
     historicalHours,
@@ -875,7 +917,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     plotType,
   ]);
 
-  // --- Memoized Globe data & Options ---
+  // --- Memoize Globe data & Options ---
   const globePoints = useMemo(
     () =>
       Object.values(displayDetectorActivity).map(({ lat, lon, lastUpdate, id }) => {
@@ -927,13 +969,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
   );
 
   // --- Interaction Handlers ---
-  // Use empty dependency arrays for placeholders that don't use external scope vars
-  const handlePlotHover = useCallback(
-    (/*_data*/) => {
-      /* Placeholder */
-    },
-    []
-  );
+  const handlePlotHover = useCallback(() => {}, []);
   const handlePlotClick = useCallback(
     (data) => {
       if (data.points.length > 0) {
@@ -958,29 +994,17 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     },
     [showSnackbar, plotType]
   );
-  const handlePlotRelayout = useCallback(
-    (/*_eventData*/) => {
-      /* Placeholder */
-    },
-    []
-  );
+  const handlePlotRelayout = useCallback(() => {}, []);
   const handleGlobePointClick = useCallback(
     (point) => {
       if (point?.id && detectorOptions.some((opt) => opt.id === point.id)) {
         stableSetSelectedDetector(point.id);
         showSnackbar(`Selected detector ${point.id} from globe.`, 'info');
-      } else {
-        /* console.debug("Clicked on globe background or invalid point:", point); */
       }
     },
     [detectorOptions, showSnackbar, stableSetSelectedDetector]
   );
-  const handleGlobePointHover = useCallback(
-    (/* _point */) => {
-      /* Placeholder */
-    },
-    []
-  );
+  const handleGlobePointHover = useCallback(() => {}, []);
   const handleCloseSnackbar = useCallback((event, reason) => {
     if (reason === 'clickaway') return;
     setSnackbarOpen(false);
@@ -1022,7 +1046,9 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
       stableSetSelectedDetector(newDetector);
       if (historicalModeRef.current) {
         setIsTransitioning(true);
-        loadHistoricalData(historicalHours, newDetector).finally(() => setIsTransitioning(false));
+        loadHistoricalData(historicalHours, newDetector).finally(() =>
+          setIsTransitioning(false)
+        );
       }
     },
     [
@@ -1034,26 +1060,32 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     ]
   );
 
-  // --- Other Memos ---
-  const showTopLoader = isLoadingKey || isLoadingHistory || isTransitioning;
-  const currentPeakInfo = useMemo(() => {
+  // --- Filtered SR Peaks Memo ---
+  const schumannPeaks = useMemo(() => {
     if (selectedDetector === 'all') return null;
-    const peaks = peakData[selectedDetector];
-    if (!peaks || peaks.length === 0) return 'No peaks detected.';
-    return peaks
-      .map(
-        (p) =>
-          `Freq: ${p.freq.toFixed(2)} Hz, Amp: ${p.amp.toFixed(1)}, Q: ${p.qFactor ? p.qFactor.toFixed(1) : 'N/A'}, S: ${p.trackStatus ? p.trackStatus.charAt(0) : '?'}`
-      )
-      .join(' | ');
+    const latestPeaks = peakData[selectedDetector] || [];
+    if (latestPeaks.length === 0) return [];
+
+    const srPeaks = latestPeaks.filter((peak) => {
+      for (const modeName in SCHUMANN_MODE_RANGES) {
+        if (
+          peak.freq >= SCHUMANN_MODE_RANGES[modeName].min &&
+          peak.freq < SCHUMANN_MODE_RANGES[modeName].max
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+    return srPeaks.sort((a, b) => a.freq - b.freq);
   }, [peakData, selectedDetector]);
+
 
   // --- Render Logic ---
   return (
     <Box
       sx={{ display: 'flex', height: '100vh', overflow: 'hidden', bgcolor: 'background.default' }}
     >
-      {/* App Bar */}
       <AppBar
         ref={appBarRef}
         position="fixed"
@@ -1064,85 +1096,86 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
           color: 'text.primary',
         }}
       >
-        <Toolbar>
-          <IconButton
-            color="inherit"
-            edge="start"
-            onClick={() => setDrawerOpen(!drawerOpen)}
-            sx={{ mr: 2 }}
-            aria-label={drawerOpen ? 'Close settings drawer' : 'Open settings drawer'}
-          >
-            <MenuIcon />
-          </IconButton>
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            EarthSync
-          </Typography>
-          {!historicalMode && lastTransientInfo && (
-            <TransientIndicator transientInfo={lastTransientInfo} />
-          )}
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              mr: 2,
-              border: `1px solid ${theme.palette.divider}`,
-              borderRadius: 1,
-              px: 1,
-              py: 0.5,
-            }}
-            aria-live="polite"
-          >
-            {historicalMode ? (
-              <HistoryIcon
-                sx={{ color: 'info.main', fontSize: '1.1rem' }}
-                aria-label="Historical Mode Active"
-              />
-            ) : wsStatus === WebSocketStatus.CONNECTED ? (
-              <CheckCircleIcon
-                sx={{ color: 'success.main', fontSize: '1.1rem' }}
-                aria-label="WebSocket Connected"
-              />
-            ) : wsStatus === WebSocketStatus.CONNECTING ? (
-              <CircularProgress size={16} color="inherit" aria-label="WebSocket Connecting" />
-            ) : (
-              <ErrorIcon
-                sx={{
-                  color: wsStatus === WebSocketStatus.ERROR ? 'error.main' : 'warning.main',
-                  fontSize: '1.1rem',
-                }}
-                aria-label="WebSocket Disconnected or Error"
-              />
-            )}
-            <Typography variant="caption" sx={{ ml: 0.5, display: { xs: 'none', sm: 'block' } }}>
-              {historicalMode
-                ? 'Historical Mode'
-                : wsStatus === WebSocketStatus.CONNECTED
-                  ? 'Real-time Connected'
-                  : wsStatus === WebSocketStatus.CONNECTING
-                    ? 'Connecting...'
-                    : wsStatus === WebSocketStatus.ERROR
-                      ? 'Connection Error'
-                      : 'Disconnected'}
+        <Toolbar sx={{ justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <IconButton
+              color="inherit"
+              edge="start"
+              onClick={() => setDrawerOpen(!drawerOpen)}
+              sx={{ mr: 1 }}
+              aria-label={drawerOpen ? 'Close settings drawer' : 'Open settings drawer'}
+            >
+              <MenuIcon />
+            </IconButton>
+            <Typography variant="h6" component="div" noWrap>
+              EarthSync
             </Typography>
           </Box>
-          <IconButton
-            color="inherit"
-            onClick={() => setDarkMode(!darkMode)}
-            aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {darkMode ? <Brightness7Icon /> : <Brightness4Icon />}
-          </IconButton>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            {!historicalMode && lastTransientInfo && (
+              <TransientIndicator transientInfo={lastTransientInfo} />
+            )}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                border: `1px solid ${theme.palette.divider}`,
+                borderRadius: 1,
+                px: 1,
+                py: 0.5,
+              }}
+              aria-live="polite"
+            >
+              {historicalMode ? (
+                <HistoryIcon
+                  sx={{ color: 'info.main', fontSize: '1.1rem' }}
+                  aria-label="Historical Mode Active"
+                />
+              ) : wsStatus === WebSocketStatus.CONNECTED ? (
+                <CheckCircleIcon
+                  sx={{ color: 'success.main', fontSize: '1.1rem' }}
+                  aria-label="WebSocket Connected"
+                />
+              ) : wsStatus === WebSocketStatus.CONNECTING ? (
+                <CircularProgress size={16} color="inherit" aria-label="WebSocket Connecting" />
+              ) : (
+                <ErrorIcon
+                  sx={{
+                    color: wsStatus === WebSocketStatus.ERROR ? 'error.main' : 'warning.main',
+                    fontSize: '1.1rem',
+                  }}
+                  aria-label="WebSocket Disconnected or Error"
+                />
+              )}
+              <Typography variant="caption" sx={{ ml: 0.5, display: { xs: 'none', sm: 'block' } }}>
+                {historicalMode
+                  ? 'Historical Mode'
+                  : wsStatus === WebSocketStatus.CONNECTED
+                    ? 'Real-time Connected'
+                    : wsStatus === WebSocketStatus.CONNECTING
+                      ? 'Connecting...'
+                      : wsStatus === WebSocketStatus.ERROR
+                        ? 'Connection Error'
+                        : 'Disconnected'}
+              </Typography>
+            </Box>
+            <IconButton
+              color="inherit"
+              onClick={() => setDarkMode(!darkMode)}
+              aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {darkMode ? <Brightness7Icon /> : <Brightness4Icon />}
+            </IconButton>
+          </Box>
         </Toolbar>
-        {showTopLoader && (
+        {(isLoadingKey || isLoadingHistory) && (
           <LinearProgress sx={{ position: 'absolute', bottom: 0, left: 0, width: '100%' }} />
         )}
       </AppBar>
 
-      {/* Main Content Area */}
       <Box sx={{ display: 'flex', flexGrow: 1, mt: `${appBarHeight}px` }}>
-        {/* Drawer */}
         <ControlsDrawer
-          drawerWidth={DRAWER_WIDTH} // Use constant
+          drawerWidth={DRAWER_WIDTH}
           appBarHeight={appBarHeight}
           drawerOpen={drawerOpen}
           darkMode={darkMode}
@@ -1163,7 +1196,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
           debouncedSetHistoricalHours={debouncedSetHistoricalHours}
           isLoadingData={isLoadingKey || isLoadingHistory}
           isTransitioning={isTransitioning}
-          currentPeakInfo={currentPeakInfo}
+          schumannPeaks={schumannPeaks} // Pass filtered peak array
           historicalTransientEvents={displayHistoricalTransients}
           globePoints={globePoints}
           handleGlobePointClick={handleGlobePointClick}
@@ -1172,12 +1205,11 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
           setPlotType={stableSetPlotType}
         />
 
-        {/* Main Plot/Chart Area */}
         <MainContent
           drawerOpen={drawerOpen}
-          drawerWidth={DRAWER_WIDTH} // Use constant
+          drawerWidth={DRAWER_WIDTH}
           appBarHeight={appBarHeight}
-          margin={MAIN_CONTENT_MARGIN} // Use constant
+          margin={MAIN_CONTENT_MARGIN}
           theme={theme}
           isLoadingData={isLoadingKey || isLoadingHistory}
           isTransitioning={isTransitioning}
@@ -1197,7 +1229,6 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
         />
       </Box>
 
-      {/* Snackbar */}
       <Snackbar
         open={snackbarOpen}
         autoHideDuration={6000}
@@ -1218,9 +1249,8 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
 });
 SpectrogramPage.displayName = 'SpectrogramPage';
 
-// Define PropTypes for SpectrogramPage
 SpectrogramPage.propTypes = {
-  token: PropTypes.string, // Can be null initially
+  token: PropTypes.string,
   onLogout: PropTypes.func.isRequired,
   darkMode: PropTypes.bool.isRequired,
   setDarkMode: PropTypes.func.isRequired,
@@ -1228,4 +1258,4 @@ SpectrogramPage.propTypes = {
   wsUrl: PropTypes.string.isRequired,
 };
 
-export default App; // Export the Auth component as default
+export default App;

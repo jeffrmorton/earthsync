@@ -3,7 +3,8 @@
  * Custom hook for managing API interactions:
  * - Fetches encryption key for WebSocket.
  * - Fetches historical spectrogram and peak data.
- * v1.1.28 - Fix History API Path.
+ * - Signals authentication errors (401/403) back to the component.
+ * v1.1.28 - Add Auth Error Signaling. No backslash escapes in template literals.
  */
 import { useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
@@ -14,6 +15,7 @@ import { EXPECTED_DOWNSAMPLED_POINTS } from '../constants';
 function useApiClient(apiUrl, token, showSnackbar) {
   const [encryptionKey, setEncryptionKey] = useState(null);
   const [isLoadingKey, setIsLoadingKey] = useState(false);
+  const [authenticationErrorOccurred, setAuthenticationErrorOccurred] = useState(false); // New state
 
   // State for historical data
   const [historicalSpectrograms, setHistoricalSpectrograms] = useState({});
@@ -30,23 +32,28 @@ function useApiClient(apiUrl, token, showSnackbar) {
       return;
     }
     setIsLoadingKey(true);
+    setAuthenticationErrorOccurred(false); // Reset auth error on new attempt
     try {
-      // Use correct path (assuming key-exchange is at root, not /api)
       const response = await axios.post(
-        `${apiUrl}/key-exchange`,
+        `${apiUrl}/key-exchange`, // Corrected interpolation
         {},
         {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}` }, // Corrected interpolation
         }
       );
       setEncryptionKey(response.data.key);
     } catch (err) {
       console.error('API Hook: Key exchange failed:', err);
-      const errorMsg = `Key Exchange Failed: ${
+      const status = err.response?.status;
+      const errorMsg = `Key Exchange Failed: ${ // Corrected interpolation
         err.response?.data?.error || (err.request ? 'Network Error' : err.message)
       }`;
       showSnackbar(errorMsg, 'error');
       setEncryptionKey(null);
+      // Signal auth error if 401 or 403
+      if (status === 401 || status === 403) {
+        setAuthenticationErrorOccurred(true);
+      }
     } finally {
       setIsLoadingKey(false);
     }
@@ -63,6 +70,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
 
       setIsLoadingHistory(true);
       setHistoryError(null);
+      setAuthenticationErrorOccurred(false); // Reset auth error on new attempt
       setHistoricalSpectrograms({});
       setHistoricalPeaks(null);
       setHistoricalActivity({});
@@ -72,13 +80,12 @@ function useApiClient(apiUrl, token, showSnackbar) {
       let noDataMessage = null;
 
       try {
-        const headers = { Authorization: `Bearer ${token}` };
+        const headers = { Authorization: `Bearer ${token}` }; // Corrected interpolation
         const params = detectorId !== 'all' ? { detectorId: detectorId } : {};
 
-        // --- Use correct prefixed API paths ---
-        const specHistoryUrl = `${apiUrl}/api/history/hours/${hours}`;
-        const peakHistoryUrl = `${apiUrl}/api/history/peaks/hours/${hours}`;
-        // Note: If range queries are implemented later, use /api/history/range and /api/history/peaks/range
+        // Use correct prefixed API paths
+        const specHistoryUrl = `${apiUrl}/api/history/hours/${hours}`; // Corrected interpolation
+        const peakHistoryUrl = `${apiUrl}/api/history/peaks/hours/${hours}`; // Corrected interpolation
 
         const [specResponse, peakResponse] = await Promise.all([
           axios.get(specHistoryUrl, { headers, params }).catch((err) => {
@@ -109,13 +116,15 @@ function useApiClient(apiUrl, token, showSnackbar) {
           const validDataPointsForDetector = [];
 
           detectorHistory.dataPoints.forEach((dataPoint) => {
+            // Use the single downsampled spectrum array directly
+            const specData = dataPoint?.spectrogram;
             if (
               dataPoint?.ts &&
-              Array.isArray(dataPoint.spectrogram) &&
-              dataPoint.spectrogram.length >= expectedPoints - 10 &&
-              dataPoint.spectrogram.length <= expectedPoints + 10
+              Array.isArray(specData) &&
+              specData.length >= expectedPoints - 10 &&
+              specData.length <= expectedPoints + 10
             ) {
-              let row = dataPoint.spectrogram;
+              let row = specData; // It's already the single downsampled array
               if (row.length !== expectedPoints) {
                 const newRow = [...row];
                 if (row.length < expectedPoints) {
@@ -128,7 +137,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
 
               validDataPointsForDetector.push({
                 ts: dataPoint.ts,
-                spectrogram: row,
+                spectrogram: row, // Store the corrected single array
                 transientInfo: dataPoint.transientInfo || { type: 'none', details: null },
               });
 
@@ -139,7 +148,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
                   ts: dataPoint.ts,
                 });
               }
-            } // else ignore invalid point
+            }
           });
 
           if (validDataPointsForDetector.length > 0) {
@@ -153,7 +162,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
           newDetectorActivityData[currentDetectorId] = {
             lat: detectorHistory.location.lat,
             lon: detectorHistory.location.lon,
-            lastUpdate: Date.now(),
+            lastUpdate: Date.now(), // Use current time as this is just for display
             id: currentDetectorId,
           };
         });
@@ -180,28 +189,42 @@ function useApiClient(apiUrl, token, showSnackbar) {
           noDataMessage = `No historical spectrogram or peak data found`;
         } else if (historicalPeaksRaw.length === 0) {
           noDataMessage = noDataMessage
-            ? `${noDataMessage} or peak data found`
+            ? `${noDataMessage} or peak data found` // Corrected interpolation
             : `No historical peak data found`;
         } else if (Object.keys(newSpectrogramData).length === 0) {
           noDataMessage = noDataMessage
-            ? `${noDataMessage} or spectrogram data found`
+            ? `${noDataMessage} or spectrogram data found` // Corrected interpolation
             : `No historical spectrogram data found`;
         }
         if (noDataMessage) {
-          noDataMessage += ` for ${detectorId === 'all' ? 'any detector' : `detector ${detectorId}`} in the last ${hours}h.`;
+          noDataMessage += ` for ${detectorId === 'all' ? 'any detector' : `detector ${detectorId}`} in the last ${hours}h.`; // Corrected interpolation
         }
       } catch (errWrapper) {
         const err = errWrapper.error || errWrapper;
         const type = errWrapper.type || 'general';
-        console.error(`API Hook: Historical ${type} data fetch error:`, err);
-        fetchError = `Failed to fetch historical ${type} data: ${
+        const status = err.response?.status;
+        fetchError = `Failed to fetch historical ${type} data: ${ // Corrected interpolation
           err.response?.data?.error || (err.request ? 'Network Error' : err.message)
         }`;
         setHistoryError(fetchError);
+        // Signal auth error if 401 or 403
+        if (status === 401 || status === 403) {
+          setAuthenticationErrorOccurred(true);
+          // Optionally customize the snackbar message for auth errors
+          showSnackbar(
+            `Authentication error fetching history (${status}). Please log in again.`,
+            'error'
+          );
+          // Avoid showing the generic fetch error snackbar below if it was an auth error
+          fetchError = null;
+        } else {
+          // Only log the error details for non-auth errors here, auth error handled above
+          console.error(`API Hook: Historical ${type} data fetch error:`, err); // Corrected interpolation
+        }
       } finally {
         setIsLoadingHistory(false);
         if (fetchError) {
-          showSnackbar(fetchError, 'error');
+          showSnackbar(fetchError, 'error'); // Show non-auth fetch errors
         } else if (noDataMessage) {
           showSnackbar(noDataMessage, 'info');
         }
@@ -213,7 +236,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
   // --- Effect to Fetch Key ---
   useEffect(() => {
     fetchKey();
-  }, [fetchKey]);
+  }, [fetchKey]); // fetchKey depends on apiUrl, token
 
   // --- Return Hook State and Functions ---
   return {
@@ -227,6 +250,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
     historicalTransients,
     isLoadingHistory,
     historyError,
+    authenticationErrorOccurred, // Return the new state
   };
 }
 

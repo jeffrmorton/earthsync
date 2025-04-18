@@ -9,7 +9,11 @@ const REDIS_HOST = process.env.REDIS_HOST;
 const REDIS_PORT = parseInt(process.env.REDIS_PORT, 10);
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
 const INTERVAL_MS = parseInt(process.env.DETECTOR_INTERVAL_MS, 10) || 5000;
-const DETECTOR_BATCH_SIZE = Math.max(1, parseInt(process.env.DETECTOR_BATCH_SIZE, 10) || 1); // Ensure >= 1
+// --- BATCH SIZE CHANGE ---
+// Enforce batch size of 1 for simpler processing and broadcasting alignment.
+// Log a warning in detector.js if the environment variable attempts to override this.
+const DETECTOR_BATCH_SIZE = 1;
+// --- END BATCH SIZE CHANGE ---
 const DETECTOR_ID = process.env.DETECTOR_ID || crypto.randomUUID();
 const LATITUDE = parseFloat(process.env.LATITUDE); // Validation happens in detector.js
 const LONGITUDE = parseFloat(process.env.LONGITUDE); // Validation happens in detector.js
@@ -47,7 +51,7 @@ module.exports = {
   REDIS_PORT,
   REDIS_PASSWORD,
   INTERVAL_MS,
-  DETECTOR_BATCH_SIZE,
+  DETECTOR_BATCH_SIZE, // Export the constant value (now fixed at 1)
   DETECTOR_ID,
   LATITUDE, // Export potentially NaN value, handle in main script
   LONGITUDE, // Export potentially NaN value, handle in main script

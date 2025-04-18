@@ -1,6 +1,6 @@
 // server/utils/metrics.js
 /**
- * Centralized Prometheus metrics setup and middleware.
+ * Centralized Prometheus metrics setup and middleware. No backslash escapes in template literals.
  */
 const promClient = require('prom-client');
 const logger = require('./logger'); // Use centralized logger
@@ -76,39 +76,31 @@ const archiveDuration = new promClient.Gauge({
  * @param {Express.Application} _app - The Express application instance (optional, marked as unused).
  */
 function initializeMetrics(_app) {
-  // Prefix app with _ to indicate unused
   logger.info('Custom Prometheus metrics defined and registered.');
-  // Optional: Could register app-specific metrics here if needed later
 }
 
 /**
  * Express middleware to track HTTP request latency and count requests.
  */
 function metricsMiddleware(req, res, next) {
-  // Skip metrics for the /metrics endpoint itself to avoid recursion
   if (req.path === '/metrics') {
     return next();
   }
 
-  const start = process.hrtime(); // Use high-resolution time
+  const start = process.hrtime();
 
-  // Hook into the response 'finish' event to capture metrics after response is sent
   res.on('finish', () => {
     try {
       const diff = process.hrtime(start);
-      const latencySeconds = diff[0] + diff[1] * 1e-9; // Calculate latency in seconds
-
-      // Normalize the route path for consistent labeling
+      const latencySeconds = diff[0] + diff[1] * 1e-9;
       const routeLabel = normalizeRoutePath(req.route?.path, req.originalUrl);
 
-      // Increment request counter with appropriate labels
       httpRequestCounter.inc({
         method: req.method,
         route: routeLabel,
         status: res.statusCode,
       });
 
-      // Observe latency for the request
       httpRequestLatency.observe(
         {
           method: req.method,
@@ -117,44 +109,30 @@ function metricsMiddleware(req, res, next) {
         latencySeconds
       );
 
-      // Optional: Debug log for recorded metrics
-      // logger.debug('HTTP Request Metrics Recorded', {
-      //   method: req.method,
-      //   url: req.originalUrl,
-      //   routeLabel: routeLabel,
-      //   status: res.statusCode,
-      //   latency_sec: latencySeconds.toFixed(6)
-      // });
     } catch (err) {
-      // Log errors occurring during metrics recording itself
       logger.error('Error recording HTTP metrics', { error: err.message, path: req.originalUrl });
     }
   });
 
-  next(); // Proceed to the next middleware/route handler
+  next();
 }
 
 /**
  * Normalizes an Express route path for consistent metrics labeling.
- * Tries to replace common patterns like IDs with placeholders.
  * @param {string | undefined} routePath - The route path (e.g., from req.route.path).
  * @param {string} originalUrlPath - The original URL path (e.g., from req.originalUrl).
  * @returns {string} The normalized route path.
  */
 function normalizeRoutePath(routePath, originalUrlPath) {
-  // Use req.route.path if available (more accurate for matched route)
   let path = routePath || originalUrlPath?.split('?')[0] || '/unknown';
 
-  // Basic replacements for common dynamic segments
-  path = path.replace(/\/\d+(\/|$)/g, '/:id$1'); // Replace numeric IDs like /users/123 -> /users/:id
-  path = path.replace(/\/[0-9a-fA-F]{24}(\/|$)/g, '/:mongoId$1'); // Replace MongoDB ObjectIds
+  path = path.replace(/\/\d+(\/|\$)/g, '/:id$1');
+  path = path.replace(/\/[0-9a-fA-F]{24}(\/|\$)/g, '/:mongoId$1');
   path = path.replace(
-    /\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\/|$)/g,
+    /\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\/|\$)/g,
     '/:uuid$1'
-  ); // Replace UUIDs
+  );
 
-  // Add more specific replacements based on your application's routes
-  // Match prefixed routes first
   if (path.startsWith('/api/auth/')) path = path.replace('/api/auth', '/auth');
   else if (path.startsWith('/api/history/peaks/hours/')) path = '/history/peaks/hours/:hours';
   else if (path.startsWith('/api/history/hours/')) path = '/history/hours/:hours';
@@ -163,20 +141,15 @@ function normalizeRoutePath(routePath, originalUrlPath) {
   else if (path.startsWith('/api/data-ingest')) path = '/data-ingest';
   else if (path.startsWith('/users/')) {
     path = '/users/:username';
-  } // Match non-prefixed user route
-  // Ensure consistency for root or simple paths last
-  else if (path === '/' || path === '/health' || path === '/metrics') {
-    // Keep known static paths as they are
   }
 
   return path;
 }
 
 module.exports = {
-  register, // Export registry for the /metrics endpoint handler
+  register,
   initializeMetrics,
   metricsMiddleware,
-  // Export individual metrics instances for use in other modules
   httpRequestCounter,
   httpRequestLatency,
   websocketConnections,
