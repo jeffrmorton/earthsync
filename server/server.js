@@ -6,6 +6,41 @@
  * No backslash escapes in template literals.
  */
 require('dotenv').config(); // Load environment variables early
+
+// --- Critical Environment Variable Validation ---
+const requiredEnvVars = [
+  'JWT_SECRET',
+  'REDIS_HOST',
+  'REDIS_PASSWORD',
+  'DB_HOST',
+  'DB_USER',
+  'DB_PASSWORD',
+  'DB_NAME',
+  'API_INGEST_KEY'
+];
+
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingVars.length > 0) {
+  console.error('FATAL: Missing required environment variables:', missingVars.join(', '));
+  console.error('Please set these variables in your .env file or environment.');
+  throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+}
+
+// Validate numeric environment variables
+const numericVars = [
+  { name: 'REDIS_PORT', default: 6379 },
+  { name: 'DB_PORT', default: 5432 },
+  { name: 'PORT', default: 3000 }
+];
+
+for (const { name, default: defaultValue } of numericVars) {
+  const value = process.env[name] ? parseInt(process.env[name], 10) : defaultValue;
+  if (isNaN(value)) {
+    console.error(`FATAL: Invalid numeric value for ${name}: ${process.env[name]}`);
+    throw new Error(`Invalid numeric value for ${name}: ${process.env[name]}`);
+  }
+}
 const express = require('express');
 const compression = require('compression');
 const helmet = require('helmet');
@@ -41,9 +76,13 @@ logger.info(`Allowed CORS origins: ${ALLOWED_ORIGINS.join(', ')}`); // Corrected
 // --- Global Error Handling Setup ---
 process.on('uncaughtException', (err, origin) => {
   logger.error('UNCAUGHT EXCEPTION', { error: err.message, stack: err.stack, origin });
-  console.error('Uncaught exception detected! Forcing shutdown immediately.', err);
   process.exitCode = 1;
-  process.kill(process.pid, 'SIGKILL');
+  // Use graceful shutdown instead of SIGKILL
+  gracefulShutdown('UNCAUGHT_EXCEPTION').catch(() => {
+    logger.error('Graceful shutdown failed during uncaught exception handling.');
+    // eslint-disable-next-line no-process-exit
+    process.exit(1);
+  });
 });
 
 process.on('unhandledRejection', (reason, promise) => {

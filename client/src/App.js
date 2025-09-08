@@ -89,7 +89,7 @@ const getLocalStorage = (key, defaultValue, parseJson = true) => {
     }
     return parseJson ? JSON.parse(saved) : saved;
   } catch (error) {
-    console.error(`Error reading localStorage key "${key}":`, error);
+    // Silently return default value for localStorage errors
     return defaultValue;
   }
 };
@@ -100,16 +100,12 @@ async function determineServerUrls(defaultApiUrl, defaultWsUrl) {
     await axios.get(`${defaultApiUrl}/health`, { timeout: HEALTH_CHECK_TIMEOUT_MS });
     return { apiUrl: defaultApiUrl, wsUrl: defaultWsUrl };
   } catch (err) {
-    console.warn(
-      `Default server URL (${defaultApiUrl}) not reachable: ${err.message}. Trying fallback...`
-    );
+    // Default server URL not reachable, trying fallback silently
     try {
       await axios.get(`${FALLBACK_API_BASE_URL}/health`, { timeout: HEALTH_CHECK_TIMEOUT_MS });
       return { apiUrl: FALLBACK_API_BASE_URL, wsUrl: FALLBACK_WS_URL };
     } catch (fallbackErr) {
-      console.error(
-        `Fallback server URL (${FALLBACK_API_BASE_URL}) also not reachable: ${fallbackErr.message}.`
-      );
+      // Both servers unreachable - this will be handled by connection logic
       return {
         apiUrl: FALLBACK_API_BASE_URL,
         wsUrl: FALLBACK_WS_URL,
@@ -205,7 +201,7 @@ function App() {
         setToken(response.data.token);
       }
     } catch (err) {
-      console.error(`${action} failed:`, err);
+      // Error will be handled by the UI through the returned error message
       let message = err.message;
       if (err.response) {
         message =
@@ -537,7 +533,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
 
   useEffect(() => {
     if (authenticationErrorOccurred) {
-      console.warn('Authentication error detected by API client, logging out.');
+      // Authentication error detected - logout handled by onLogout
       onLogout();
     }
   }, [authenticationErrorOccurred, onLogout]);

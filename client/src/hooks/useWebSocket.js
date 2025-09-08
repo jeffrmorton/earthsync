@@ -192,7 +192,7 @@ function useWebSocket(
           currentWsInstance = new WebSocket(`${wsUrl}/?token=${token}`);
           wsRef.current = currentWsInstance;
         } catch (error) {
-          console.error('WS Hook: Failed to create WebSocket instance:', error); // Keep error
+          // WebSocket creation failed - error handled by snackbar below
           setWsStatus(WebSocketStatus.ERROR);
           showSnackbar(`WebSocket creation failed: ${error.message}`, 'error');
           wsRef.current = null;
@@ -239,13 +239,13 @@ function useWebSocket(
             const messageData = JSON.parse(decryptedText);
             updateSpectrogramDataThrottled([messageData]);
           } catch (err) {
-            console.error('WS Hook: Error processing incoming message:', err); // Keep error
-            showSnackbar(`WebSocket Data Error: ${err.message}. Check console.`, 'error');
+            // Message processing error handled by snackbar below
+            showSnackbar(`WebSocket Data Error: ${err.message}`, 'error');
           }
         };
 
         currentWsInstance.onerror = (error) => {
-          console.error('WS Hook: WebSocket error event occurred.', error); // Keep error
+          // WebSocket error handled by snackbar below
           if (wsRef.current === currentWsInstance) {
             setWsStatus(WebSocketStatus.ERROR);
             showSnackbar('WebSocket connection error occurred.', 'error');

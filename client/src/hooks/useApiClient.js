@@ -43,7 +43,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
       );
       setEncryptionKey(response.data.key);
     } catch (err) {
-      console.error('API Hook: Key exchange failed:', err);
+      // Key exchange failed - error will be handled by calling code
       const status = err.response?.status;
       const errorMsg = `Key Exchange Failed: ${ // Corrected interpolation
         err.response?.data?.error || (err.request ? 'Network Error' : err.message)
@@ -218,8 +218,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
           // Avoid showing the generic fetch error snackbar below if it was an auth error
           fetchError = null;
         } else {
-          // Only log the error details for non-auth errors here, auth error handled above
-          console.error(`API Hook: Historical ${type} data fetch error:`, err); // Corrected interpolation
+          // Non-auth error will be handled by snackbar below
         }
       } finally {
         setIsLoadingHistory(false);

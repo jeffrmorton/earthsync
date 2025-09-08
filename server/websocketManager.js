@@ -161,49 +161,15 @@ async function broadcastMessage(wsMessagePayload) {
     transientType: wsMessagePayload.transientInfo?.type || 'none',
   });
 
-  const broadcastPromises = [];
+  // Collect all active WebSocket clients with usernames
+  const activeClients = [];
   wss.clients.forEach((ws) => {
     if (ws.readyState === WebSocket.OPEN && ws.username) {
-      const userRedisKey = `${ws.username}`; // Corrected interpolation
-
-      const sendPromise = (async () => {
-        try {
-          const keyHex = await redisClient.get(userRedisKey);
-
-          if (keyHex) {
-            const encryptedMessage = encryptMessage(wsMessageString, keyHex);
-            if (encryptedMessage) {
-              await new Promise((resolve, reject) => {
-                ws.send(encryptedMessage, (err) => {
-                  if (err) {
-                    logger.error('WebSocket send error', {
-                      username: ws.username,
-                      error: err.message,
-                    });
-                    reject(err);
-                  } else {
-                    resolve();
-                  }
-                });
-              });
-              sentCount++;
-            } else {
-              logger.warn('WebSocket send skipped: Encryption error', { username: ws.username });
-            }
-          } else {
-            logger.warn('WebSocket send skipped: No encryption key found in Redis', {
-              username: ws.username,
-              redisKey: REDIS_USER_KEY_PREFIX + userRedisKey,
-            });
-          }
-        } catch (redisErr) {
-          logger.error('WebSocket send skipped: Redis error getting encryption key', {
-            username: ws.username,
-            error: redisErr.message,
-          });
-        }
-      })();
-      broadcastPromises.push(sendPromise.catch((e) => e));
+      activeClients.push({
+        ws,
+        username: ws.username,
+        redisKey: `${REDIS_USER_KEY_PREFIX}${ws.username}`
+      });
     } else {
       logger.debug('WebSocket send skipped: Client not open or not authenticated', {
         username: ws.username || 'N/A',
@@ -211,6 +177,64 @@ async function broadcastMessage(wsMessagePayload) {
       });
     }
   });
+
+  if (activeClients.length === 0) {
+    return;
+  }
+
+  // Batch Redis key retrieval for all clients using pipeline
+  const pipeline = redisClient.pipeline();
+  activeClients.forEach(client => {
+    pipeline.get(client.redisKey);
+  });
+
+  const broadcastPromises = [];
+  try {
+    const results = await pipeline.exec();
+
+    // Process results and send messages
+    activeClients.forEach((client, index) => {
+      const [err, keyHex] = results[index];
+
+      if (err) {
+        logger.error('Redis pipeline error for client', {
+          username: client.username,
+          error: err.message,
+        });
+        return;
+      }
+
+      if (keyHex) {
+        const encryptedMessage = encryptMessage(wsMessageString, keyHex);
+        if (encryptedMessage) {
+          const sendPromise = new Promise((resolve, reject) => {
+            client.ws.send(encryptedMessage, (sendErr) => {
+              if (sendErr) {
+                logger.error('WebSocket send error', {
+                  username: client.username,
+                  error: sendErr.message,
+                });
+                reject(sendErr);
+              } else {
+                sentCount++;
+                resolve();
+              }
+            });
+          });
+          broadcastPromises.push(sendPromise.catch((e) => e));
+        } else {
+          logger.warn('WebSocket send skipped: Encryption error', { username: client.username });
+        }
+      } else {
+        logger.warn('WebSocket send skipped: No encryption key found in Redis', {
+          username: client.username,
+          redisKey: client.redisKey,
+        });
+      }
+    });
+  } catch (pipelineErr) {
+    logger.error('Redis pipeline execution failed', { error: pipelineErr.message });
+  }
 
   await Promise.allSettled(broadcastPromises);
 

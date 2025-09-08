@@ -125,7 +125,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
       console.log('Test user registered.');
     } catch (err) {
       setupError = `Setup failed: ${err.message}\n${err.stack || ''}`; // Store error message and stack
-      console.error(setupError);
+      // Setup error will be thrown as Error object below
       // Attempt cleanup even on failure
       if (dbClient) {
         try {
@@ -273,7 +273,6 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     let receivedTargetMessage = false;
     let decryptedData = null;
     let wsError = null;
-    let wsClosedCode = null;
     let closeReason = '';
 
     // Promise to handle WebSocket message reception or timeout/error
@@ -321,7 +320,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
             console.log(`Ignoring WS message from other detector: ${messageData.detectorId}`);
           }
         } catch (err) {
-          console.error('WebSocket message processing error:', err);
+          // WebSocket message processing error handled by test framework
           clearTimeout(timeout); // Clear timeout on error too
           ws.close(1011, 'Message processing error'); // Close with error code
           reject(err); // Reject the promise on processing error
@@ -331,12 +330,11 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
       ws.on('error', (err) => {
         clearTimeout(timeout);
         wsError = err;
-        console.error('WebSocket connection error event:', err);
+        // WebSocket connection error handled by test framework
         reject(err); // Reject promise on connection error
       });
 
       ws.on('close', (code, reason) => {
-        wsClosedCode = code;
         closeReason = reason.toString();
         console.log(`WebSocket connection closed event: Code=${code}, Reason="${closeReason}"`); // Log close event always
         // Reject only if closed unexpectedly *before* target message received and not already rejected
@@ -398,15 +396,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     console.log(`Test message ingested for ${wsDetectorId}. Waiting for WS response...`);
 
     // Wait for the WebSocket message promise to resolve or reject
-    try {
-      await messagePromise;
-    } catch (e) {
-      // Log details if promise rejected
-      console.error('WebSocket test failed. Error:', e.message);
-      console.error('WebSocket Error Object:', wsError);
-      console.error('WebSocket Closed Code/Reason:', wsClosedCode, closeReason);
-      throw e; // Re-throw error to fail the test
-    }
+    await messagePromise;
 
     // --- Assertions on the received and decrypted data ---
     expect(receivedTargetMessage).toBe(true);
@@ -424,9 +414,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     );
     expect(detectedPeak).toBeDefined();
     if (!detectedPeak) {
-      console.error(
-        `Expected peak near ${peakFreqHz.toFixed(2)}Hz not found in ${JSON.stringify(decryptedData.detectedPeaks)}`
-      );
+      // Peak detection failure will be handled by test assertion failure
     } else {
       expect(detectedPeak.amp).toBeCloseTo(20.0, 0); // Check amplitude (should be close to original max)
       expect(detectedPeak.qFactor).toBeGreaterThan(1); // Expect a reasonable Q-factor

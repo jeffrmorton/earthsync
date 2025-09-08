@@ -16,10 +16,19 @@ const dbConfig = {
   database: DB_NAME,
   password: DB_PASSWORD,
   port: DB_PORT,
+
+  // Connection pool limits
   max: 20, // Max connections in pool
-  idleTimeoutMillis: 30000, // Keeps connections active for 30s
-  // Use different connection timeouts for test vs other environments
-  connectionTimeoutMillis: NODE_ENV === 'test' ? 5000 : 10000, // Increased slightly
+  min: 2, // Minimum connections to maintain
+  idleTimeoutMillis: 30000, // Close idle connections after 30s
+  connectionTimeoutMillis: NODE_ENV === 'test' ? 5000 : 10000, // Connection timeout
+  query_timeout: 60000, // Query timeout (60 seconds)
+  statement_timeout: 60000, // Statement timeout (60 seconds)
+
+  // Resource management
+  allowExitOnIdle: true, // Allow pool to close when all clients are idle
+  keepAlive: true, // Keep connections alive
+  keepAliveInitialDelayMillis: 0, // Start keepalive immediately
 };
 
 // --- Initialize Pool ---

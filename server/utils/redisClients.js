@@ -20,11 +20,34 @@ const commonRedisOptions = {
   port: REDIS_PORT,
   password: REDIS_PASSWORD,
   lazyConnect: true, // Connect explicitly
+
+  // Connection pooling and resource limits
+  maxRetriesPerRequest: 3, // Limit retries for commands after connection is established
+  retryDelayOnFailover: 100, // Delay before retrying on failover
+  enableReadyCheck: true, // Check connection readiness before use
+  keepAlive: 30000, // Keep connections alive for 30 seconds
+  family: 4, // Use IPv4 (more stable in containers)
+
+  // Resource management
+  connectTimeout: 10000, // 10 seconds connection timeout
+  commandTimeout: 5000, // 5 seconds command timeout
+  enableOfflineQueue: false, // Don't queue commands if connection is down (prevents memory buildup)
+  autoResubscribe: true, // Automatically resubscribe to channels after reconnection
+  autoResendUnfulfilledCommands: false, // Don't resend failed commands
+
   retryStrategy: (times) => {
+    const maxRetries = 10;
     const delay = Math.min(times * 150, 5000); // Exponential backoff with limit
-    logger.warn(`Redis connection retry attempt ${times}. Retrying in ${delay}ms...`);
+
+    if (times > maxRetries) {
+      logger.error(`Redis connection failed after ${maxRetries} retries. Giving up.`);
+      return false; // Stop retrying
+    }
+
+    logger.warn(`Redis connection retry attempt ${times}/${maxRetries}. Retrying in ${delay}ms...`);
     return delay;
   },
+
   reconnectOnError: (err) => {
     logger.error(`Redis reconnect triggered by error: ${err.message}`);
     // Only retry on specific errors if needed, true allows retrying on most errors
@@ -34,10 +57,9 @@ const commonRedisOptions = {
     }
     return true; // Retry on other errors
   },
-  maxRetriesPerRequest: 3, // Limit retries for commands after connection is established
+
+  // Error handling and debugging
   showFriendlyErrorStack: NODE_ENV !== 'production', // Show better errors in dev
-  connectTimeout: 10000, // 10 seconds connection timeout
-  enableOfflineQueue: false, // Don't queue commands if connection is down
 };
 
 /**
