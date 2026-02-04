@@ -30,7 +30,7 @@ const commonRedisOptions = {
 
   // Resource management
   connectTimeout: 10000, // 10 seconds connection timeout
-  commandTimeout: 5000, // 5 seconds command timeout
+  commandTimeout: 30000, // 30 seconds command timeout (to accommodate blocking reads and slow container I/O)
   enableOfflineQueue: false, // Don't queue commands if connection is down (prevents memory buildup)
   autoResubscribe: true, // Automatically resubscribe to channels after reconnection
   autoResendUnfulfilledCommands: false, // Don't resend failed commands

@@ -16,10 +16,10 @@ const requiredEnvVars = [
   'DB_USER',
   'DB_PASSWORD',
   'DB_NAME',
-  'API_INGEST_KEY'
+  'API_INGEST_KEY',
 ];
 
-const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+const missingVars = requiredEnvVars.filter((varName) => !process.env[varName]);
 
 if (missingVars.length > 0) {
   console.error('FATAL: Missing required environment variables:', missingVars.join(', '));
@@ -31,7 +31,7 @@ if (missingVars.length > 0) {
 const numericVars = [
   { name: 'REDIS_PORT', default: 6379 },
   { name: 'DB_PORT', default: 5432 },
-  { name: 'PORT', default: 3000 }
+  { name: 'PORT', default: 3000 },
 ];
 
 for (const { name, default: defaultValue } of numericVars) {
@@ -207,8 +207,13 @@ async function gracefulShutdown(signal = 'UNKNOWN') {
 
   try {
     logger.info('Stopping background tasks...');
-    stopStreamProcessing();
-    stopArchiver();
+    stopStreamProcessing(); // Sets internal flag, will exit after current block
+    stopArchiver(); // Clears timer, current task might finish
+
+    // Wait a brief period to allow current processing/archival iterations to finish
+    // before we start closing the connections they depend on.
+    logger.info('Waiting 1000ms for current tasks to yield...');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     logger.info('Closing HTTP server...');
     await new Promise((resolve, reject) => {
@@ -228,14 +233,12 @@ async function gracefulShutdown(signal = 'UNKNOWN') {
     closeAllConnections();
 
     logger.info('Closing database and Redis connections...');
-    await Promise.allSettled([
-      closeRedisClients(),
-      db.end(),
-    ]).then((results) => {
+    await Promise.allSettled([closeRedisClients(), db.end()]).then((results) => {
       results.forEach((result, i) => {
         if (result.status === 'rejected') {
           const source = i === 0 ? 'Redis' : 'Database';
-          logger.error(`Error closing ${source} connections:`, { // Corrected interpolation
+          logger.error(`Error closing ${source} connections:`, {
+            // Corrected interpolation
             error: result.reason?.message || result.reason,
           });
           shutdownError = true;

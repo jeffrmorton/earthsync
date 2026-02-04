@@ -1,7 +1,6 @@
-// server/archiver.js
 /**
  * Background task for archiving old data from Redis to PostgreSQL.
- * Handles individual spectrogram records in Redis lists. No backslash escapes in template literals.
+ * Handles individual spectrogram records in Redis lists.
  */
 const db = require('./db'); // DB access for inserts
 const { getStreamRedisClient } = require('./utils/redisClients');
@@ -33,102 +32,97 @@ async function archiveSpectrogramList(key, cutoffTimestampMs) {
     return 0;
   }
 
-  const recordsToArchiveToDb = [];
-  const recordStringsToKeep = [];
-  let originalRedisCount = 0;
   const streamRedisClient = getStreamRedisClient();
 
   try {
-    const allRecordStrings = await streamRedisClient.lrange(key, 0, -1);
-    originalRedisCount = allRecordStrings.length;
-    if (originalRedisCount === 0) {
-      logger.debug(`Skipping spectrogram archive: List is empty`, { key });
-      archiveRecordsCounter.inc({ type: 'spec', status: 'skipped' }, 0);
+    // 1. Get the oldest 100 records from the tail (index N-100 to N-1)
+    const batchSizeFromRedis = 100;
+    const oldRecordStrings = await streamRedisClient.lrange(key, -batchSizeFromRedis, -1);
+
+    if (oldRecordStrings.length === 0) {
+      logger.debug(`Skipping spectrogram archive: List is empty or no records at tail`, { key });
       return 0;
     }
 
-    logger.debug(
-      `Scanning ${originalRedisCount} individual spectrogram records in ${key} for archiving...`
-    );
+    const recordsToArchiveToDb = [];
 
-    for (const recordStr of allRecordStrings) {
-      let keepThisRecord = true;
-      let parsedRecord = null;
+    // 2. Iterate from the VERY END (tail) backwards to find consecutive old records
+    // This ensures we can safely RPOP them later.
+    for (let i = oldRecordStrings.length - 1; i >= 0; i--) {
+      const recordStr = oldRecordStrings[i];
       try {
-        parsedRecord = JSON.parse(recordStr);
-        // Expecting the new single-spectrum record format stored by streamProcessor
+        const parsedRecord = JSON.parse(recordStr);
         if (
           parsedRecord &&
           parsedRecord.timestamp &&
           parsedRecord.detectorId === detectorId &&
-          Array.isArray(parsedRecord.spectrogram) // Check if spectrogram array exists
+          Array.isArray(parsedRecord.spectrogram)
         ) {
           const recordTime = new Date(parsedRecord.timestamp).getTime();
           if (recordTime < cutoffTimestampMs) {
-            keepThisRecord = false; // Mark for removal from Redis
-
-            // Prepare DB record directly from the parsed record
+            // Prepare DB record
             recordsToArchiveToDb.push({
               detector_id: parsedRecord.detectorId,
-              timestamp: parsedRecord.timestamp, // Use ISO string for DB
+              timestamp: parsedRecord.timestamp,
               location_lat: parsedRecord.location?.lat ?? null,
               location_lon: parsedRecord.location?.lon ?? null,
-              spectrogram_data: parsedRecord.spectrogram, // Store the single downsampled array
-              // Access transient info from the nested processingResults array
+              spectrogram_data: parsedRecord.spectrogram,
               transient_detected:
                 parsedRecord.processingResults?.[0]?.transientInfo?.type !== 'none' || false,
               transient_details:
                 parsedRecord.processingResults?.[0]?.transientInfo?.details || null,
             });
+          } else {
+            // Found a record that is too new. Stop here to keep list chronological.
+            break;
           }
         } else {
+          // Invalid record structure at the tail.
+          // We could skip it or stop. Stopping is safer for RPOP.
           logger.warn(
-            'Invalid record structure or detectorId mismatch found during spec archive scan, keeping.',
-            { key }
+            'Invalid record structure at tail during spec archive scan. Stopping batch.',
+            {
+              key,
+            }
           );
+          break;
         }
       } catch (parseErr) {
-        logger.warn('Failed to parse record JSON during spec archive scan, keeping.', {
-          key,
-          recordStart: recordStr.substring(0, 100),
-          error: parseErr.message,
-        });
+        logger.warn(
+          'Failed to parse record JSON at tail during spec archive scan. Stopping batch.',
+          {
+            key,
+            error: parseErr.message,
+          }
+        );
+        break;
       }
-      if (keepThisRecord) {
-        recordStringsToKeep.push(recordStr); // Keep original string if not archived
-      }
-    } // End loop
+    }
 
+    // 3. If we found any consecutive old records at the tail, archive them
     if (recordsToArchiveToDb.length > 0) {
       logger.info(
         `Attempting to archive ${recordsToArchiveToDb.length} individual spectrogram records from ${key}`
       );
+
+      // Insert into DB. Throws on error in db.js
       const insertedCount = await db.insertHistoricalSpectrograms(recordsToArchiveToDb);
       archiveRecordsCounter.inc({ type: 'spec', status: 'archived' }, insertedCount);
 
-      // Atomically replace the list
-      const multi = streamRedisClient.multi();
-      multi.del(key);
-      if (recordStringsToKeep.length > 0) {
-        multi.rpush(key, ...recordStringsToKeep);
-      }
-      await multi.exec();
+      // 4. Atomic RPOP only the ones we archived.
+      // This is safe because even if new items were LPUSHed to the head during DB insert,
+      // RPOP only removes from the tail.
+      await streamRedisClient.rpop(key, recordsToArchiveToDb.length);
 
-      logger.info(
-        `Successfully archived ${insertedCount} spectrograms and updated Redis list for ${key}. Kept ${recordStringsToKeep.length} records.`
-      );
+      logger.info(`Successfully archived ${insertedCount} spectrograms from tail of ${key}.`);
       return insertedCount;
     } else {
-      logger.debug(`No spectrogram records older than cutoff found in ${key}.`);
-      if (originalRedisCount > 0) {
-        archiveRecordsCounter.inc({ type: 'spec', status: 'skipped' }, 0);
-      }
+      logger.debug(`No spectrogram records at tail older than cutoff found in ${key}.`);
       return 0;
     }
   } catch (archiveError) {
     logger.error(`Error archiving spectrograms for ${key}`, {
       error: archiveError.message,
-      stack: archiveError.stack,
     });
     archiveRecordsCounter.inc({ type: 'spec', status: 'error' });
     return 0;
@@ -255,18 +249,34 @@ async function runCleanupAndArchiving() {
   try {
     const streamRedisClientInstance = getStreamRedisClient();
 
-    const specHistoryKeys = await streamRedisClientInstance.keys(`${REDIS_SPEC_HISTORY_PREFIX}*`);
-    logger.debug(`Found ${specHistoryKeys.length} spectrogram history keys for potential cleanup.`);
-    specKeysProcessed = specHistoryKeys.length;
-    for (const key of specHistoryKeys) {
-      totalSpecArchived += await archiveSpectrogramList(key, specCutoffTimestampMs);
+    // Use scanStream for non-blocking key discovery of spectrogram history
+    logger.debug('Starting non-blocking scan for spectrogram history keys...');
+    const specScanStream = streamRedisClientInstance.scanStream({
+      match: `${REDIS_SPEC_HISTORY_PREFIX}*`,
+      count: 100,
+    });
+
+    for await (const keys of specScanStream) {
+      for (const key of keys) {
+        specKeysProcessed++;
+        const archivedCount = await archiveSpectrogramList(key, specCutoffTimestampMs);
+        totalSpecArchived += archivedCount;
+      }
     }
 
-    const peakHistoryKeys = await streamRedisClientInstance.keys(`${REDIS_PEAK_HISTORY_PREFIX}*`);
-    logger.debug(`Found ${peakHistoryKeys.length} peak history keys for potential cleanup.`);
-    peakKeysProcessed = peakHistoryKeys.length;
-    for (const key of peakHistoryKeys) {
-      totalPeakArchived += await archivePeakSet(key, peakCutoffTimestampMs);
+    // Use scanStream for non-blocking key discovery of peak history
+    logger.debug('Starting non-blocking scan for peak history keys...');
+    const peakScanStream = streamRedisClientInstance.scanStream({
+      match: `${REDIS_PEAK_HISTORY_PREFIX}*`,
+      count: 100,
+    });
+
+    for await (const keys of peakScanStream) {
+      for (const key of keys) {
+        peakKeysProcessed++;
+        const archivedCount = await archivePeakSet(key, peakCutoffTimestampMs);
+        totalPeakArchived += archivedCount;
+      }
     }
   } catch (err) {
     logger.error('Unhandled error during history cleanup/archiving task execution', {

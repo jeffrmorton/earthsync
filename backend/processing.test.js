@@ -29,6 +29,7 @@ const {
   detectPeaksEnhanced,
   trackPeaks,
   detectTransients,
+  resetCaches,
   // Import constants used within tests or functions
   RAW_FREQUENCY_POINTS,
   FREQUENCY_RESOLUTION_HZ,
@@ -65,6 +66,8 @@ describe('Data Processing Functions', () => {
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
     mockLogger.debug.mockClear();
+    // Reset local caches in processingUtils
+    resetCaches();
   });
 
   // --- detectPeaksEnhanced Tests ---

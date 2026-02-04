@@ -93,30 +93,25 @@ router.get('/health', async (req, res, next) => {
  * Generates and stores an encryption key for the authenticated user.
  * Requires JWT authentication.
  */
-router.post(
-  '/key-exchange',
-  apiLimiter,
-  authenticateToken,
-  async (req, res, next) => {
-    const username = req.user.username;
-    try {
-      const key = crypto.randomBytes(32).toString('hex');
-      const redisKey = `${username}`; // Corrected interpolation
+router.post('/key-exchange', apiLimiter, authenticateToken, async (req, res, next) => {
+  const username = req.user.username;
+  try {
+    const key = crypto.randomBytes(32).toString('hex');
+    const redisKey = `${username}`; // Corrected interpolation
 
-      await getRedisClient().setex(redisKey, ENCRYPTION_KEY_TTL_SECONDS, key);
+    await getRedisClient().setex(redisKey, ENCRYPTION_KEY_TTL_SECONDS, key);
 
-      logger.info('Encryption key generated and stored for user', {
-        username,
-        redisKey: REDIS_USER_KEY_PREFIX + redisKey,
-        ttl: ENCRYPTION_KEY_TTL_SECONDS,
-      });
-      res.json({ key });
-    } catch (err) {
-      logger.error('Key exchange process failed', { username, error: err.message });
-      next(err);
-    }
+    logger.info('Encryption key generated and stored for user', {
+      username,
+      redisKey: REDIS_USER_KEY_PREFIX + redisKey,
+      ttl: ENCRYPTION_KEY_TTL_SECONDS,
+    });
+    res.json({ key });
+  } catch (err) {
+    logger.error('Key exchange process failed', { username, error: err.message });
+    next(err);
   }
-);
+});
 
 /**
  * GET /metrics

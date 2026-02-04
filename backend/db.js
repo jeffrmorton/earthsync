@@ -333,8 +333,7 @@ async function insertHistoricalSpectrograms(records) {
           logger.error('Rollback failed after spec insert error', { error: rbErr.message })
         );
     }
-    // Decide whether to throw or return 0? Returning 0 for now.
-    return 0;
+    throw err; // Re-throw to signal failure to archiver
   } finally {
     if (client) client.release();
   }
@@ -408,7 +407,7 @@ async function insertHistoricalPeaks(records) {
           logger.error('Rollback failed after peak insert error', { error: rbErr.message })
         );
     }
-    return 0;
+    throw err; // Re-throw to signal failure to archiver
   } finally {
     if (client) client.release();
   }

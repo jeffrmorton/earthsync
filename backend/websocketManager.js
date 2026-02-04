@@ -8,7 +8,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { getRedisClient } = require('./utils/redisClients');
 const { websocketConnections } = require('./utils/metrics');
-const { JWT_SECRET, REDIS_USER_KEY_PREFIX } = require('./config/constants');
+const { JWT_SECRET } = require('./config/constants');
 const logger = require('./utils/logger');
 
 let wss = null;
@@ -155,7 +155,8 @@ async function broadcastMessage(wsMessagePayload) {
     return;
   }
 
-  logger.debug(`Broadcasting message to ${totalClients} potential clients`, { // Corrected interpolation
+  logger.debug(`Broadcasting message to ${totalClients} potential clients`, {
+    // Corrected interpolation
     detectorId: wsMessagePayload.detectorId,
     peakCount: wsMessagePayload.detectedPeaks?.length || 0,
     transientType: wsMessagePayload.transientInfo?.type || 'none',
@@ -168,7 +169,7 @@ async function broadcastMessage(wsMessagePayload) {
       activeClients.push({
         ws,
         username: ws.username,
-        redisKey: `${REDIS_USER_KEY_PREFIX}${ws.username}`
+        redisKey: ws.username,
       });
     } else {
       logger.debug('WebSocket send skipped: Client not open or not authenticated', {
@@ -184,7 +185,7 @@ async function broadcastMessage(wsMessagePayload) {
 
   // Batch Redis key retrieval for all clients using pipeline
   const pipeline = redisClient.pipeline();
-  activeClients.forEach(client => {
+  activeClients.forEach((client) => {
     pipeline.get(client.redisKey);
   });
 

@@ -1,17 +1,17 @@
 # EarthSync Project (v1.1.8)
 
 ## Overview
-EarthSync simulates, distributes, ingests, and visualizes time-series geospatial data, modeling Schumann Resonances (SR). It features a React client, Node.js backend (API/WebSocket/Ingest), Node.js detectors, Redis, PostgreSQL, and Prometheus/Grafana monitoring.
+EarthSync simulates, distributes, ingests, and visualizes time-series geospatial data, modeling Schumann Resonances (SR). It features a React **frontend**, Node.js **backend** (API/WebSocket/Ingest), Node.js **detectors**, Redis, PostgreSQL, and Prometheus/Grafana monitoring.
 
 **Version 1.1.8** introduces enhanced server-side peak detection (smoothing, prominence, configurable parameters), client-side visualization of historical peak trends (Frequency, Amplitude, Q-Factor), improved error feedback, and minor globe enhancements. Includes CI test fixes (v1.1.8a).
 
 ## API Documentation
-See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major API *endpoint* changes from v1.1.7, but the underlying peak detection is improved.
+See `backend/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major API *endpoint* changes from v1.1.7, but the underlying peak detection is improved.
 
 ## Features (v1.1.8)
 -   **Real-time 3D Visualization**: Plotly.js surface plot showing processed (downsampled) spectrogram data.
 -   **Server-Side Analysis**:
-    -   **Enhanced Peak Detection**: Now uses smoothing, prominence checks, minimum distance filtering, and absolute thresholding on **raw** data for more robust peak finding. Configurable via `server/.env`.
+    -   **Enhanced Peak Detection**: Now uses smoothing, prominence checks, minimum distance filtering, and absolute thresholding on **raw** data for more robust peak finding. Configurable via `backend/.env`.
     -   Q-Factor estimation with interpolation.
     -   Detected peaks (Freq, Amp, Q-Factor) sent via WebSocket and stored historically.
     -   Placeholders for future peak tracking and transient detection logic.
@@ -22,7 +22,7 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
 -   **Historical Data & Visualization**:
     -   Retrieve downsampled spectrogram data via `/history/:hours`.
     -   Retrieve detected peak data (Freq, Amp, Q-Factor, Timestamp) via `/history/peaks/:hours`.
-    -   **New:** Client displays 2D line charts of historical peak Frequency, Amplitude, and Q-Factor vs. Time for the selected detector.
+    -   **New:** Frontend displays 2D line charts of historical peak Frequency, Amplitude, and Q-Factor vs. Time for the selected detector.
     -   Data cached in Redis (Spectrograms in Lists, Peaks in Sorted Sets).
 -   **Multi-Detector Support**: Simulators run by default; augment/replace via the ingest API.
 -   **User Authentication**: JWT-based registration/login.
@@ -46,16 +46,16 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
 1.  `git clone <repository-url>` or save the setup script and run it (`./setup_earthsync.sh`).
 2.  `cd earthsync`
 3.  **(IMPORTANT)** If upgrading, clean up old volumes: `docker compose down -v`
-4.  Review `.env` files (especially `server/.env` for `API_INGEST_KEY` and peak detection parameters).
+4.  Review `.env` files (especially `backend/.env` for `API_INGEST_KEY` and peak detection parameters).
 5.  `docker compose up --build -d`
 
 ## Usage
--   **Client**: `http://localhost:3001` (Register/Login, view real-time or historical data, including new peak charts in historical mode).
+-   **Frontend**: `http://localhost:3001` (Register/Login, view real-time or historical data, including new peak charts in historical mode).
 -   **API**: `http://localhost:3000`
 -   **Data Ingest**: `POST http://localhost:3000/data-ingest` (Requires `X-API-Key` header and valid JSON body - see `openapi.yaml`).
 -   **Prometheus**: `http://localhost:9090`
 -   **Grafana**: `http://localhost:3002` (Anonymous Viewer access)
--   **Logs**: `docker compose logs -f <service_name>`
+-   **Logs**: `docker compose logs -f <service_name>` (e.g. `backend`, `frontend`)
 
 ## Stopping
 -   `docker compose down`
@@ -63,12 +63,14 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
 
 ## Configuration
 -   Managed via `.env` files and `docker-compose.yml`.
--   Set `API_INGEST_KEY` in `server/.env`.
--   Adjust peak detection parameters in `server/.env`:
+-   Set `API_INGEST_KEY` in `backend/.env`.
+-   Adjust peak detection parameters in `backend/.env`:
     -   `PEAK_SMOOTHING_WINDOW`: Points for moving average (odd integer, default 5).
     -   `PEAK_PROMINENCE_FACTOR`: Sensitivity relative to local noise (float > 0, default 1.5).
     -   `PEAK_MIN_DISTANCE_HZ`: Minimum frequency separation between peaks (float > 0, default 1.0).
     -   `PEAK_ABSOLUTE_THRESHOLD`: Minimum amplitude for a peak candidate (float >= 0, default 1.0).
+    -   `PEAK_TRACKING_FREQ_TOLERANCE_HZ`: Hz tolerance for tracking same peak (float, default 0.5).
+    -   `PEAK_TRACKING_STATE_TTL_SECONDS`: Timeout to clear old tracking state (int, default 300).
 
 ## Monitoring Details
 -   Grafana Dashboard updated to reflect metrics accurately, including peak detection rate, ingest stats, and Redis peak history size.
@@ -78,18 +80,18 @@ See `server/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major A
 
 ## Troubleshooting
 -   **WebSocket Timeout in CI/Locally:** If the WS test fails with a timeout:
-    -   Check server logs (`docker compose logs server`) for errors during stream processing or WS broadcasting, especially around peak detection and key retrieval. Look for "WS send skip" messages.
-    -   Temporarily increase `LOG_LEVEL` to `debug` in `server/.env` and restart (`docker compose restart server`) for more detail.
+    -   Check backend logs (`docker compose logs backend`) for errors during stream processing or WS broadcasting, especially around peak detection and key retrieval. Look for "WS send skip" messages.
+    -   Temporarily increase `LOG_LEVEL` to `debug` in `backend/.env` and restart (`docker compose restart backend`) for more detail.
     -   Ensure Redis is healthy (`docker compose ps`).
     -   Try increasing `WS_MESSAGE_TIMEOUT` in the `integration.test.js` file further if the server appears slow under load (now defaults to 25000ms).
--   **No Peaks Detected/Too Many Peaks:** Adjust peak detection parameters in `server/.env` and restart the server (`docker compose restart server`). Check server logs for peak detection details.
--   **Data Ingest Issues:** Check server logs for API key/validation errors (esp. spectrogram length - must be 5501). Check request headers and JSON payload.
+-   **No Peaks Detected/Too Many Peaks:** Adjust peak detection parameters in `backend/.env` and restart the backend (`docker compose restart backend`). Check backend logs for peak detection details.
+-   **Data Ingest Issues:** Check backend logs for API key/validation errors (esp. spectrogram length - must be 5501). Check request headers and JSON payload.
 -   **Historical Peak Charts Empty:** Ensure historical data exists (`docker compose exec redis redis-cli -a <password> SCAN 0 MATCH peaks:*`, `ZCARD peaks:<id>`). Check browser console for errors. Verify detector selection.
 -   **Build Failures**: Check Docker daemon, Dockerfile syntax, `npm install` logs. Use `docker compose build --no-cache <service_name>`.
 -   **Connection Issues**: Check `docker compose ps`, logs, `.env` files, port conflicts.
 -   **Service Unhealthy**: Check logs, test healthcheck command.
 -   **Redis `overcommit_memory`**: Apply `vm.overcommit_memory=1` or disable saves.
--   **No Data/Flat Chart**: Check browser console (F12). Check server/detector logs. Check Redis (`XLEN spectrogram_stream`, `XRANGE spectrogram_stream - + COUNT 10`, `SCAN 0 MATCH userkey:*`, `SCAN 0 MATCH spectrogram_history:*`).
+-   **No Data/Flat Chart**: Check browser console (F12). Check backend/detector logs. Check Redis (`XLEN spectrogram_stream`, `XRANGE spectrogram_stream - + COUNT 10`, `SCAN 0 MATCH userkey:*`, `SCAN 0 MATCH spectrogram_history:*`).
 -   **Grafana Issues**: Run `docker compose down -v` first. Check logs.
 -   **Settings Not Persisted**: Clear browser localStorage.
 

@@ -1,8 +1,6 @@
-// server/processingUtils.js
 /**
  * Utility functions for EarthSync data processing (Peak Detection, Tracking, Transients).
  * Extracted for testability.
- * v1.1.28 - Use Centralized Constants & Anti-Aliasing Downsampling. No backslash escapes in template literals.
  */
 const crypto = require('crypto');
 // Import constants from the centralized configuration file
@@ -27,6 +25,19 @@ const {
 const { getPeakTrackingState, savePeakTrackingState, deletePeakTrackingState } = require('./db');
 // Import centralized logger
 const logger = require('./utils/logger');
+
+// --- In-memory Caches ---
+const trackingCache = new Map(); // detectorId -> previousState array
+const baselineCache = new Map(); // detectorId -> { baseline, historyHash }
+const MAX_CACHE_SIZE = 100; // Cap caches to prevent memory leaks
+
+/** Helper to enforce cache size limits */
+function enforceCacheLimit(cache) {
+  if (cache.size > MAX_CACHE_SIZE) {
+    const firstKey = cache.keys().next().value;
+    cache.delete(firstKey);
+  }
+}
 
 // --- Constants derived locally or reused from imports ---
 const MAX_FREQUENCY_HZ = 55;
@@ -81,14 +92,6 @@ function smooth(data, windowSize) {
   return smoothed;
 }
 
-/** Helper function to calculate the median of an array of numbers */
-function calculateMedian(arr) {
-  const numericArr = arr.filter((v) => typeof v === 'number' && !isNaN(v));
-  if (numericArr.length === 0) return 0;
-  const sortedArr = [...numericArr].sort((a, b) => a - b);
-  const mid = Math.floor(sortedArr.length / 2);
-  return sortedArr.length % 2 === 0 ? (sortedArr[mid - 1] + sortedArr[mid]) / 2 : sortedArr[mid];
-}
 
 // --- ANTI-ALIASING DOWNSAMPLE ---
 /**
@@ -152,9 +155,12 @@ function detectPeaksEnhanced(rawSpectrum, configOverrides = {}) {
 
   const candidates = [];
   for (let i = 1; i < n - 1; i++) {
+    // Improved peak identification: Handle plateaus caused by smoothing
     if (
-      smoothedSpectrum[i] > smoothedSpectrum[i - 1] &&
-      smoothedSpectrum[i] > smoothedSpectrum[i + 1] &&
+      smoothedSpectrum[i] >= smoothedSpectrum[i - 1] &&
+      smoothedSpectrum[i] >= smoothedSpectrum[i + 1] &&
+      (smoothedSpectrum[i] > smoothedSpectrum[i - 1] ||
+        smoothedSpectrum[i] > smoothedSpectrum[i + 1]) &&
       smoothedSpectrum[i] >= absoluteThreshold
     ) {
       candidates.push({ index: i, smoothedAmp: smoothedSpectrum[i] });
@@ -273,7 +279,8 @@ function detectPeaksEnhanced(rawSpectrum, configOverrides = {}) {
             (interpolatedRightIdx - interpolatedLeftIdx) * FREQUENCY_RESOLUTION_HZ
           );
         } catch (interpErr) {
-          logger.debug(`FWHM interpolation failed for peak at index ${index}`, { // Corrected interpolation
+          logger.debug(`FWHM interpolation failed for peak at index ${index}`, {
+            // Corrected interpolation
             error: interpErr.message,
           });
           fwhmHz = Math.max(
@@ -307,20 +314,32 @@ async function trackPeaks(detectorId, currentPeaks, currentTimestampMs, config =
   const freqTolerance = config.freqTolerance || PEAK_TRACKING_FREQ_TOLERANCE_HZ;
   let previousState = [];
 
-  try {
-    const dbState = await getPeakTrackingState(detectorId);
-    if (dbState && Array.isArray(dbState)) {
-      previousState = dbState;
-    }
-    logger.debug(`Retrieved ${previousState.length} previous peak states for tracking`, { // Corrected interpolation
-      detectorId,
+  // Try retrieving from local cache first
+  if (trackingCache.has(detectorId)) {
+    previousState = trackingCache.get(detectorId);
+    logger.debug(`Used cached peak tracking state for ${detectorId}`, {
+      count: previousState.length,
     });
-  } catch (err) {
-    logger.error(
-      `Failed to retrieve previous peak state for ${detectorId}, assuming all new peaks.`, // Corrected interpolation
-      { error: err.message }
-    );
-    previousState = [];
+  } else {
+    try {
+      const dbState = await getPeakTrackingState(detectorId);
+      if (dbState && Array.isArray(dbState)) {
+        previousState = dbState;
+        enforceCacheLimit(trackingCache);
+        trackingCache.set(detectorId, previousState); // Hydrate cache
+      }
+      logger.debug(
+        `Retrieved ${previousState.length} previous peak states from DB for ${detectorId}`
+      );
+    } catch (err) {
+      logger.error(
+        `Failed to retrieve previous peak state from DB for ${detectorId}, assuming all new peaks.`,
+        {
+          error: err.message,
+        }
+      );
+      previousState = [];
+    }
   }
 
   const matchedPrevIndices = new Set();
@@ -353,7 +372,8 @@ async function trackPeaks(detectorId, currentPeaks, currentTimestampMs, config =
     } else {
       trackId = crypto.randomUUID();
       trackStatus = 'new';
-      logger.debug(`Peak at ${currentPeak.freq.toFixed(2)}Hz starting new track ${trackId}`, { // Corrected interpolation
+      logger.debug(`Peak at ${currentPeak.freq.toFixed(2)}Hz starting new track ${trackId}`, {
+        // Corrected interpolation
         detectorId,
       });
     }
@@ -369,13 +389,16 @@ async function trackPeaks(detectorId, currentPeaks, currentTimestampMs, config =
 
   try {
     if (nextStateToSave.length > 0) {
+      enforceCacheLimit(trackingCache);
+      trackingCache.set(detectorId, nextStateToSave); // Update cache
       await savePeakTrackingState(detectorId, nextStateToSave);
     } else if (previousState.length > 0) {
+      trackingCache.delete(detectorId); // Clear cache
       await deletePeakTrackingState(detectorId);
-      logger.debug(`No current peaks detected, deleted tracking state from DB for ${detectorId}`); // Corrected interpolation
+      logger.debug(`No current peaks detected, deleted tracking state for ${detectorId}`);
     }
   } catch (err) {
-    logger.error(`Failed to save/delete peak tracking state for ${detectorId}`, { // Corrected interpolation
+    logger.error(`Failed to save/delete peak tracking state for ${detectorId}`, {
       error: err.message,
     });
   }
@@ -422,8 +445,15 @@ async function detectTransients(detectorId, rawSpectrum, redisHistoryClient, con
       .map((json) => {
         try {
           const parsed = JSON.parse(json);
-          // Use the downsampled spectrum stored in the record
-          return Array.isArray(parsed?.spectrogram) ? parsed.spectrogram : null;
+          const spec = parsed?.spectrogram;
+          if (Array.isArray(spec)) {
+            // Support both [array] and array formats
+            if (Array.isArray(spec[0])) {
+              return spec[0];
+            }
+            return spec;
+          }
+          return null;
         } catch {
           return null;
         }
@@ -437,20 +467,53 @@ async function detectTransients(detectorId, rawSpectrum, redisHistoryClient, con
       return result;
     }
 
-    const baselineLength = historicalSpectra[0].length;
-    const baselineSpectrum = new Array(baselineLength).fill(0);
-    for (let i = 0; i < baselineLength; i++) {
-      const valuesAtFreq = [];
-      for (const spec of historicalSpectra) {
-        if (spec.length > i) {
-          const val = Number(spec[i]);
-          if (!isNaN(val)) {
-            valuesAtFreq.push(val);
+    // --- Baseline Caching Optimization ---
+    // Optimization: Hash the raw JSON strings directly instead of parsed objects
+    const historyHash = crypto.createHash('md5').update(historyJSONs.join('')).digest('hex');
+    const cached = baselineCache.get(detectorId);
+
+    let baselineSpectrum;
+    if (cached && cached.historyHash === historyHash) {
+      baselineSpectrum = cached.baseline;
+      logger.debug(`Used cached baseline for transient detection on ${detectorId}`);
+    } else {
+      const baselineLength = historicalSpectra[0].length;
+      const numHistory = historicalSpectra.length;
+      baselineSpectrum = new Array(baselineLength).fill(0);
+
+      // OPTIMIZATION: Reuse a single buffer for values at each frequency to avoid 5000+ allocations
+      const valuesBuffer = new Float64Array(numHistory);
+
+      for (let i = 0; i < baselineLength; i++) {
+        let count = 0;
+        for (let j = 0; j < numHistory; j++) {
+          const spec = historicalSpectra[j];
+          if (spec.length > i) {
+            const val = Number(spec[i]);
+            if (!isNaN(val)) {
+              valuesBuffer[count++] = val;
+            }
           }
         }
+
+        if (count > 0) {
+          // Use a slice of the TypedArray for sorting/median
+          const currentValues = valuesBuffer.subarray(0, count);
+          currentValues.sort(); // TypedArray sort is numeric and in-place
+          const mid = Math.floor(count / 2);
+          baselineSpectrum[i] =
+            count % 2 !== 0
+              ? currentValues[mid]
+              : (currentValues[mid - 1] + currentValues[mid]) / 2;
+        } else {
+          baselineSpectrum[i] = 0;
+        }
       }
-      baselineSpectrum[i] = calculateMedian(valuesAtFreq);
+      enforceCacheLimit(baselineCache);
+      baselineCache.set(detectorId, { baseline: baselineSpectrum, historyHash });
+      logger.debug(`Calculated and cached new baseline for ${detectorId}`);
     }
+    // --- End Baseline Caching ---
 
     let broadbandExceedCount = 0;
     const narrowBandPeakCandidates = [];
@@ -545,4 +608,8 @@ module.exports = {
   SCHUMANN_FREQUENCIES,
   POINTS_PER_HZ,
   DOWNSAMPLE_FACTOR,
+  resetCaches: () => {
+    trackingCache.clear();
+    baselineCache.clear();
+  },
 };

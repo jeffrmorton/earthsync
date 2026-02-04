@@ -108,7 +108,6 @@ function metricsMiddleware(req, res, next) {
         },
         latencySeconds
       );
-
     } catch (err) {
       logger.error('Error recording HTTP metrics', { error: err.message, path: req.originalUrl });
     }

@@ -52,9 +52,9 @@ services:
       resources: { limits: { cpus: '0.5', memory: '512M' } }
     restart: unless-stopped
 
-  server:
+  backend:
     build:
-       context: ./server
+       context: ./backend
        dockerfile: Dockerfile
     ports:
       - "${PORT:-3000}:3000"
@@ -106,7 +106,7 @@ services:
     # REMOVED: command: tail -f /dev/null # Keep container running
 
   detector1: &detector-template
-    build: ./detector
+    build: ./detectors
     environment:
       - DETECTOR_ID=detector1
       - LATITUDE=40.7128
@@ -154,13 +154,13 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-password}
       - REDIS_CONNECT_TIMEOUT_MS=20000
 
-  client:
+  frontend:
     build:
-      context: ./client
+      context: ./frontend
     ports:
       - "${CLIENT_PORT:-3001}:80"
     depends_on:
-      - server
+      - backend
     networks:
       - earthsync-network
     healthcheck:

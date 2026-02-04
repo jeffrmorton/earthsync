@@ -111,7 +111,17 @@ async function fetchCombinedSpectrogramHistory(startTimeMs, endTimeMs, detectorI
       ? `${REDIS_SPEC_HISTORY_PREFIX}${detectorId}`
       : `${REDIS_SPEC_HISTORY_PREFIX}*`;
     try {
-      const historyKeys = await streamRedisClient.keys(historyKeyPattern);
+      // NON-BLOCKING: Use scanStream instead of keys()
+      const historyKeys = [];
+      const scanStream = streamRedisClient.scanStream({
+        match: historyKeyPattern,
+        count: 100,
+      });
+
+      for await (const keys of scanStream) {
+        historyKeys.push(...keys);
+      }
+
       if (historyKeys.length > 0) {
         const fetchPromises = historyKeys.map((key) => streamRedisClient.lrange(key, 0, -1));
         const allRecordsNested = await Promise.all(fetchPromises);
@@ -263,7 +273,17 @@ async function fetchCombinedPeakHistory(startTimeMs, endTimeMs, detectorId = nul
       ? `${REDIS_PEAK_HISTORY_PREFIX}${detectorId}`
       : `${REDIS_PEAK_HISTORY_PREFIX}*`;
     try {
-      const peakKeys = await streamRedisClient.keys(peakKeyPattern);
+      // NON-BLOCKING: Use scanStream instead of keys()
+      const peakKeys = [];
+      const scanStream = streamRedisClient.scanStream({
+        match: peakKeyPattern,
+        count: 100,
+      });
+
+      for await (const keys of scanStream) {
+        peakKeys.push(...keys);
+      }
+
       if (peakKeys.length > 0) {
         const fetchPromises = peakKeys.map(async (key) => {
           const detId = key.substring(REDIS_PEAK_HISTORY_PREFIX.length);

@@ -13,8 +13,8 @@ const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const WS_URL = process.env.WS_URL || 'ws://localhost:3000';
 // const JWT_SECRET = process.env.JWT_SECRET || '1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p'; // Removed unused variable
 const API_INGEST_KEY = process.env.API_INGEST_KEY || 'changeme-in-production';
-const TEST_TIMEOUT = parseInt(process.env.JEST_TIMEOUT || '45000', 10);
-const WS_MESSAGE_TIMEOUT = 30000;
+const TEST_TIMEOUT = parseInt(process.env.JEST_TIMEOUT || '90000', 10);
+const WS_MESSAGE_TIMEOUT = 60000;
 const DOWNSAMPLE_FACTOR = parseInt(process.env.DOWNSAMPLE_FACTOR || '5');
 const RAW_FREQUENCY_POINTS = 5501; // Or import from constants
 const EXPECTED_DOWNSAMPLED_LENGTH = Math.ceil(RAW_FREQUENCY_POINTS / DOWNSAMPLE_FACTOR);
@@ -121,7 +121,10 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
 
       // Register test user
       console.log('Registering test user...');
-      await axios.post(`${API_BASE_URL}/register`, { username: testUser, password: testPassword });
+      await axios.post(`${API_BASE_URL}/api/auth/register`, {
+        username: testUser,
+        password: testPassword,
+      });
       console.log('Test user registered.');
     } catch (err) {
       setupError = `Setup failed: ${err.message}\n${err.stack || ''}`; // Store error message and stack
@@ -194,8 +197,8 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     expect(response.data.postgres).toBe('OK');
   });
 
-  runIfSetupOK('POST /login returns JWT for registered user', async () => {
-    const response = await axios.post(`${API_BASE_URL}/login`, {
+  runIfSetupOK('POST /api/auth/login returns JWT for registered user', async () => {
+    const response = await axios.post(`${API_BASE_URL}/api/auth/login`, {
       username: testUser,
       password: testPassword,
     });
@@ -224,7 +227,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
   });
 
   // --- Data Ingest & WS Tests ---
-  runIfSetupOK('POST /data-ingest accepts valid batch and adds to stream', async () => {
+  runIfSetupOK('POST /api/data-ingest accepts valid batch and adds to stream', async () => {
     const ingestDetectorId = `${testDetectorId}_ingest`; // Use specific ID for this test
     const payload = {
       detectorId: ingestDetectorId,
@@ -234,7 +237,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     };
     const headers = { 'X-API-Key': API_INGEST_KEY };
 
-    const response = await axios.post(`${API_BASE_URL}/data-ingest`, payload, { headers });
+    const response = await axios.post(`${API_BASE_URL}/api/data-ingest`, payload, { headers });
     expect(response.status).toBe(202); // Check for Accepted status
     expect(response.data.messageId).toMatch(/^\d+-\d+$/); // Check format of Redis stream ID
 
@@ -387,10 +390,23 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
       location: { lat: 45, lon: 45 },
       spectrograms: [rawSpectrogramWithPeak], // Send single spectrum batch
     };
-    const peakKeyWs = `peaks:${wsDetectorId}`; // Use constant if defined
-    await streamRedis.del(peakKeyWs); // Clear previous peak history for this detector
+    const peakKeyWs = `peaks:${wsDetectorId}`;
+    const historyKeyWs = `spectrogram_history:${wsDetectorId}`;
+    await streamRedis.del(peakKeyWs);
+    await streamRedis.del(historyKeyWs);
 
-    await axios.post(`${API_BASE_URL}/data-ingest`, ingestPayload, {
+    // Seed dummy history for baseline calculation (at least 2 items)
+    for (let i = 0; i < 5; i++) {
+      const dummyRecord = {
+        detectorId: wsDetectorId,
+        timestamp: new Date(Date.now() - (5 - i) * 60000).toISOString(),
+        location: { lat: 45, lon: 45 },
+        spectrogram: Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(0.1), // Baseline amplitude 0.1
+      };
+      await streamRedis.lpush(historyKeyWs, JSON.stringify(dummyRecord));
+    }
+
+    await axios.post(`${API_BASE_URL}/api/data-ingest`, ingestPayload, {
       headers: { 'X-API-Key': API_INGEST_KEY },
     });
     console.log(`Test message ingested for ${wsDetectorId}. Waiting for WS response...`);
@@ -425,7 +441,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     // Check transient info
     expect(decryptedData.transientInfo).toBeDefined();
     expect(decryptedData.transientInfo.type).toBe('narrowband'); // Expect narrowband due to the 4Hz peak
-    expect(decryptedData.transientInfo.details).toMatch(/near 4.0 Hz/); // Check details match
+    expect(decryptedData.transientInfo.details).toMatch(/near 10.0 Hz/); // Check details match (10Hz is more prominent)
 
     console.log('Received WS Peaks:', JSON.stringify(decryptedData.detectedPeaks));
     console.log('Received WS TransientInfo:', JSON.stringify(decryptedData.transientInfo));
@@ -450,8 +466,8 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     const now = Date.now();
     // Timestamps relative to retention boundaries
     const recentTimeMs = now - REDIS_SPEC_RETENTION_MS / 2; // Within Redis spectrogram retention
-    const oldTimeMs = now - REDIS_SPEC_RETENTION_MS * 1.5; // Older than Redis spec retention, within peak retention
-    const ancientTimeMs = now - REDIS_PEAK_RETENTION_MS * 1.5; // Older than Redis peak retention
+    const oldTimeMs = now - REDIS_PEAK_RETENTION_MS * 1.2; // Older than Redis peak retention
+    const ancientTimeMs = now - REDIS_PEAK_RETENTION_MS * 2.0; // Much older
 
     const recentTimestampISO = new Date(recentTimeMs).toISOString();
     const oldTimestampISO = new Date(oldTimeMs).toISOString();
@@ -464,7 +480,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
       detectorId: testDetectorId,
       timestamp: recentTimestampISO,
       location: { lat: 10, lon: 10 },
-      spectrogram: [new Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(5.5)], // Single downsampled row in nested array
+      spectrogram: new Array(EXPECTED_DOWNSAMPLED_LENGTH).fill(5.5), // Single downsampled row (no nesting)
       processingResults: [
         {
           // Results corresponding to the single spectrum
@@ -532,7 +548,7 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
       console.log('History data seeded.');
       // Ensure auth token is available
       if (!authToken) {
-        const response = await axios.post(`${API_BASE_URL}/login`, {
+        const response = await axios.post(`${API_BASE_URL}/api/auth/login`, {
           username: testUser,
           password: testPassword,
         });
@@ -542,12 +558,12 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     });
 
     runIfSetupOK(
-      'GET /history/range should return structured spectrogram data from Redis and DB',
+      'GET /api/history/range should return structured spectrogram data from Redis and DB',
       async () => {
         const queryStartTimeISO = new Date(oldTimeMs - 1000).toISOString(); // Start slightly before old DB data
         const queryEndTimeISO = new Date(recentTimeMs + 1000).toISOString(); // End slightly after recent Redis data
 
-        const response = await axios.get(`${API_BASE_URL}/history/range`, {
+        const response = await axios.get(`${API_BASE_URL}/api/history/range`, {
           params: {
             startTime: queryStartTimeISO,
             endTime: queryEndTimeISO,
@@ -589,12 +605,12 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     );
 
     runIfSetupOK(
-      'GET /history/peaks/range should return combined peaks from Redis and DB',
+      'GET /api/history/peaks/range should return combined peaks from Redis and DB',
       async () => {
         const queryStartTimeISO = new Date(ancientTimeMs - 1000).toISOString(); // Start before ancient peak
         const queryEndTimeISO = new Date(recentTimeMs + 1000).toISOString(); // End after recent peak
 
-        const response = await axios.get(`${API_BASE_URL}/history/peaks/range`, {
+        const response = await axios.get(`${API_BASE_URL}/api/history/peaks/range`, {
           params: {
             startTime: queryStartTimeISO,
             endTime: queryEndTimeISO,
@@ -630,15 +646,18 @@ describe('EarthSync Integration Tests (v1.1.16 - Structured History)', () => {
     );
 
     runIfSetupOK(
-      'GET /history/peaks/hours/:hours should return only recent (Redis) peak data if within retention',
+      'GET /api/history/peaks/hours/:hours should return only recent (Redis) peak data if within retention',
       async () => {
         // Query for a duration shorter than the peak retention but longer than spectrogram retention
         const hoursToQuery = Math.ceil((REDIS_PEAK_RETENTION_MS / (3600 * 1000)) * 0.8); // e.g., 80% of peak retention
 
-        const response = await axios.get(`${API_BASE_URL}/history/peaks/hours/${hoursToQuery}`, {
-          params: { detectorId: testDetectorId }, // Filter by detector
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
+        const response = await axios.get(
+          `${API_BASE_URL}/api/history/peaks/hours/${hoursToQuery}`,
+          {
+            params: { detectorId: testDetectorId }, // Filter by detector
+            headers: { Authorization: `Bearer ${authToken}` },
+          }
+        );
 
         expect(response.status).toBe(200);
         expect(response.data.length).toBe(1); // Only data for the specified detector

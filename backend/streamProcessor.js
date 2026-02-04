@@ -1,10 +1,7 @@
-// server/streamProcessor.js
 /**
  * Processes messages from the Redis spectrogram stream.
  * Handles downsampling (with anti-aliasing), peak detection/tracking, transient detection,
  * storing INDIVIDUAL processed results in history list, and initiating broadcasts.
- * Assumes batch size is 1 due to detector/ingest constraints. No backslash escapes in template literals.
- * Fixes potential race condition on startup/reconnect with XREADGROUP.
  */
 const { getStreamRedisClient } = require('./utils/redisClients');
 const {
@@ -50,10 +47,10 @@ function parseStreamMessage(fields, messageId) {
       !parsedMessage.detectorId ||
       !parsedMessage.location ||
       !Array.isArray(parsedMessage.spectrogram) ||
-      parsedMessage.spectrogram.length !== 1 ||
+      parsedMessage.spectrogram.length === 0 ||
       !Array.isArray(parsedMessage.spectrogram[0])
     ) {
-      logger.warn('Invalid message structure or batch size != 1 in stream', {
+      logger.warn('Invalid message structure or empty batch in stream', {
         messageId,
         detectorId: parsedMessage?.detectorId,
         batchSize: parsedMessage?.spectrogram?.length,
@@ -148,6 +145,16 @@ async function startStreamProcessing() {
     const streamRedisClient = getStreamRedisClient(); // Get client instance for setup
 
     // --- Ensure Consumer Group Exists (Run Once Before Loop) ---
+    // Wait for client to be ready if it isn't yet
+    if (streamRedisClient.status !== 'ready') {
+      logger.info('Waiting for Stream Redis client to be ready for group initialization...');
+      await new Promise((resolve) => {
+        streamRedisClient.once('ready', resolve);
+        // Fallback for case where it's already ready between check and listener
+        if (streamRedisClient.status === 'ready') resolve();
+      });
+    }
+
     try {
       await streamRedisClient.xgroup(
         'CREATE',
@@ -181,7 +188,9 @@ async function startStreamProcessing() {
       try {
         // --- Check connection status before blocking read ---
         if (streamRedisClient.status !== 'ready') {
-          logger.warn(`Redis stream client not ready (status: ${streamRedisClient.status}). Waiting...`);
+          logger.warn(
+            `Redis stream client not ready (status: ${streamRedisClient.status}). Waiting...`
+          );
           await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1s before retrying loop
           continue;
         }
@@ -194,7 +203,7 @@ async function startStreamProcessing() {
           'COUNT',
           10,
           'BLOCK',
-          5000,
+          3000,
           'STREAMS',
           REDIS_SPECTROGRAM_STREAM_KEY,
           '>'
@@ -208,14 +217,18 @@ async function startStreamProcessing() {
           if (streamName !== REDIS_SPECTROGRAM_STREAM_KEY) continue;
 
           for (const [messageId, fields] of messages) {
-            let shouldAck = true;
             const parsedMessage = parseStreamMessage(fields, messageId);
 
             if (!parsedMessage) {
               logger.warn('Acking invalid message due to parsing failure', { messageId });
               await streamRedisClient
                 .xack(REDIS_SPECTROGRAM_STREAM_KEY, REDIS_STREAM_GROUP_NAME, messageId)
-                .catch((ackErr) => logger.error('Failed to ACK invalid message', { messageId, error: ackErr.message }));
+                .catch((ackErr) =>
+                  logger.error('Failed to ACK invalid message', {
+                    messageId,
+                    error: ackErr.message,
+                  })
+                );
               continue;
             }
 
@@ -227,66 +240,85 @@ async function startStreamProcessing() {
               timestampMs,
             } = parsedMessage;
 
-            // Since batch size is fixed to 1, we process only the first (index 0)
-            if (rawSpectrogramBatch.length !== 1) {
-               logger.warn('Received unexpected batch size > 1, processing only first spectrum.', { messageId, detectorId });
-            }
-
             try {
               const processingStartTime = Date.now();
               const historyPipeline = streamRedisClient.pipeline(); // Create pipeline for this message
 
-              // Process the single raw spectrum
-              const result = await processSingleSpectrum(
-                rawSpectrogramBatch[0],
-                detectorId,
-                timestampMs
-              );
+              // Batch processing: Iterate over all spectra in the array
+              for (let i = 0; i < rawSpectrogramBatch.length; i++) {
+                const currentRawSpectrum = rawSpectrogramBatch[i];
+                // If there are multiple spectra, shift timestamps based on interval (working backwards from message timestamp)
+                const currentTimestampMs =
+                  timestampMs - (rawSpectrogramBatch.length - 1 - i) * interval;
 
-              // Prepare single-spectrum data for history list
-              const dataToStoreInHistory = {
-                detectorId: detectorId,
-                timestamp: new Date(timestampMs).toISOString(),
-                location: location,
-                interval: interval,
-                spectrogram: result.downsampled || [],
-                processingResults: [ { detectedPeaks: result.detectedPeaks, transientInfo: result.transientInfo } ],
-              };
-              const messageStringForHistory = JSON.stringify(dataToStoreInHistory);
+                const result = await processSingleSpectrum(
+                  currentRawSpectrum,
+                  detectorId,
+                  currentTimestampMs
+                );
 
-              // Add individual record to Redis History List
-              const historyKey = `${REDIS_SPEC_HISTORY_PREFIX}${detectorId}`;
-              historyPipeline.lpush(historyKey, messageStringForHistory);
-              historyPipeline.ltrim(historyKey, 0, MAX_SPECTROGRAM_HISTORY_LENGTH - 1);
+                // Prepare single-spectrum data for history list
+                const dataToStoreInHistory = {
+                  detectorId: detectorId,
+                  timestamp: new Date(currentTimestampMs).toISOString(),
+                  location: location,
+                  interval: interval,
+                  spectrogram: result.downsampled || [],
+                  processingResults: [
+                    { detectedPeaks: result.detectedPeaks, transientInfo: result.transientInfo },
+                  ],
+                };
+                const messageStringForHistory = JSON.stringify(dataToStoreInHistory);
 
-              // Add Peaks to Redis History ZSet
-              if (result.detectedPeaks.length > 0) {
-                const peakKey = `${REDIS_PEAK_HISTORY_PREFIX}${detectorId}`;
-                historyPipeline.zadd(peakKey, timestampMs, JSON.stringify(result.detectedPeaks));
+                // Add individual record to Redis History List
+                const historyKey = `${REDIS_SPEC_HISTORY_PREFIX}${detectorId}`;
+                historyPipeline.lpush(historyKey, messageStringForHistory);
+                historyPipeline.ltrim(historyKey, 0, MAX_SPECTROGRAM_HISTORY_LENGTH - 1);
+
+                // Add Peaks to Redis History ZSet
+                if (result.detectedPeaks.length > 0) {
+                  const peakKey = `${REDIS_PEAK_HISTORY_PREFIX}${detectorId}`;
+                  historyPipeline.zadd(
+                    peakKey,
+                    currentTimestampMs,
+                    JSON.stringify(result.detectedPeaks)
+                  );
+                }
+
+                // Prepare and Broadcast WebSocket Message
+                const wsMessagePayload = {
+                  detectorId: detectorId,
+                  timestamp: new Date(currentTimestampMs).toISOString(),
+                  location: location,
+                  interval: interval,
+                  spectrogram: [result.downsampled || []],
+                  detectedPeaks: result.detectedPeaks,
+                  transientInfo: result.transientInfo,
+                };
+                broadcastMessage(wsMessagePayload).catch((broadcastErr) => {
+                  logger.error('Error during WebSocket broadcast', {
+                    error: broadcastErr.message,
+                  });
+                });
               }
 
-              // Execute Redis Pipeline
+              // Execute Redis Pipeline (all spectra in this batch)
               await historyPipeline.exec();
 
-              // Prepare and Broadcast WebSocket Message
-              const wsMessagePayload = {
-                detectorId: detectorId,
-                timestamp: new Date(timestampMs).toISOString(),
-                location: location,
-                interval: interval,
-                spectrogram: [result.downsampled || []],
-                detectedPeaks: result.detectedPeaks,
-                transientInfo: result.transientInfo,
-              };
-              broadcastMessage(wsMessagePayload).catch((broadcastErr) => {
-                logger.error('Error during WebSocket broadcast', { error: broadcastErr.message });
-              });
+              // AT-LEAST-ONCE: ACK only after history pipeline success
+              await streamRedisClient
+                .xack(REDIS_SPECTROGRAM_STREAM_KEY, REDIS_STREAM_GROUP_NAME, messageId)
+                .catch((ackErr) => {
+                  logger.error('Failed to ACK message after successful processing', {
+                    messageId,
+                    error: ackErr.message,
+                  });
+                });
 
               const processingDuration = Date.now() - processingStartTime;
               logger.debug(
-                `Finished processing message ${messageId} for ${detectorId}. Duration: ${processingDuration}ms`
+                `Finished processing batch of ${rawSpectrogramBatch.length} for ${detectorId}. Duration: ${processingDuration}ms`
               );
-
             } catch (processingError) {
               logger.error('Critical error during stream message processing', {
                 messageId,
@@ -294,15 +326,8 @@ async function startStreamProcessing() {
                 error: processingError.message,
                 stack: processingError.stack,
               });
-              shouldAck = true;
-            } finally {
-              if (shouldAck) {
-                await streamRedisClient
-                  .xack(REDIS_SPECTROGRAM_STREAM_KEY, REDIS_STREAM_GROUP_NAME, messageId)
-                  .catch((ackErr) => {
-                    logger.error('Failed to ACK message', { messageId, error: ackErr.message });
-                  });
-              }
+              // We don't ACK here on processing error, allowing the message to be retried
+              // unless it's a "poison pill" (parsing failed, which is handled above).
             }
           }
         }
@@ -315,8 +340,8 @@ async function startStreamProcessing() {
         });
         // Wait only if the error wasn't due to shutdown
         if (processingActive && !isShuttingDown) {
-             logger.info('Waiting 5 seconds before retrying stream read...');
-             await new Promise((resolve) => setTimeout(resolve, 5000));
+          logger.info('Waiting 500ms before retrying stream read...');
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
     } // End while loop

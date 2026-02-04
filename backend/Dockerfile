@@ -3,6 +3,7 @@ FROM node:18.20.7-alpine AS base
 WORKDIR /app
 
 COPY package*.json ./
+RUN apk add --no-cache curl
 RUN npm install
 
 COPY . .
