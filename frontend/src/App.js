@@ -69,7 +69,6 @@ import {
   SPECTROGRAM_FREQUENCY_MAX_HZ,
   SLIDER_DEBOUNCE_MS,
   HEALTH_CHECK_TIMEOUT_MS,
-  TRANSIENT_INDICATOR_TIMEOUT_MS,
   SCHUMANN_MODE_RANGES,
 } from './constants';
 
@@ -816,10 +815,12 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     if (plotType === '2d') {
       return {
         ...baseLayout,
-        xaxis: { // TIME AXIS
-          title: { // Use explicit title object
+        xaxis: {
+          // TIME AXIS
+          title: {
+            // Use explicit title object
             text: 'Time',
-            font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
+            font: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
           },
           tickvals: safeTimeTickVals,
           ticktext: safeTimeTickText,
@@ -827,10 +828,12 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
           gridcolor: darkMode ? '#555555' : '#d3d3d3',
           automargin: true, // Use automargin
         },
-        yaxis: { // FREQUENCY AXIS
-          title: { // Use explicit title object
+        yaxis: {
+          // FREQUENCY AXIS
+          title: {
+            // Use explicit title object
             text: 'Frequency (Hz)',
-            font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
+            font: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
           },
           tickvals: safeFreqTickVals,
           ticktext: safeFreqTickText,
@@ -846,15 +849,17 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
           activecolor: theme.palette.primary.main,
         },
       };
-    } else { // 3D Surface
+    } else {
+      // 3D Surface
       baseLayout.margin = { t: 50, r: 10, b: 10, l: 10 };
       return {
         ...baseLayout,
         scene: {
-          xaxis: { // FREQUENCY AXIS
+          xaxis: {
+            // FREQUENCY AXIS
             title: {
-                text: 'Frequency (Hz)',
-                font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
+              text: 'Frequency (Hz)',
+              font: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
             },
             tickvals: safeFreqTickVals,
             ticktext: safeFreqTickText,
@@ -864,10 +869,11 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
             backgroundcolor: 'rgba(0,0,0,0)',
             range: [0, SPECTROGRAM_FREQUENCY_MAX_HZ],
           },
-          yaxis: { // TIME AXIS
+          yaxis: {
+            // TIME AXIS
             title: {
-                text: 'Time',
-                font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
+              text: 'Time',
+              font: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
             },
             tickvals: safeTimeTickVals,
             ticktext: safeTimeTickText,
@@ -877,10 +883,11 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
             backgroundcolor: 'rgba(0,0,0,0)',
             autorange: 'reversed',
           },
-          zaxis: { // AMPLITUDE AXIS
+          zaxis: {
+            // AMPLITUDE AXIS
             title: {
-                text: 'Amplitude',
-                font: { size: 12, color: darkMode ? '#ffffff' : '#000000' }
+              text: 'Amplitude',
+              font: { size: 12, color: darkMode ? '#ffffff' : '#000000' },
             },
             tickfont: { size: 10, color: darkMode ? '#ffffff' : '#000000' },
             range: [minAmplitude, maxAmplitude],
@@ -955,12 +962,16 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
   );
 
   // --- Debounced Sliders ---
-  const debouncedSetTimeSteps = useCallback(
-    debounce((value) => stableSetTimeSteps(Math.max(6, Math.floor(value / 5))), SLIDER_DEBOUNCE_MS),
+  const debouncedSetTimeSteps = useMemo(
+    () =>
+      debounce(
+        (value) => stableSetTimeSteps(Math.max(6, Math.floor(value / 5))),
+        SLIDER_DEBOUNCE_MS
+      ),
     [stableSetTimeSteps]
   );
-  const debouncedSetHistoricalHours = useCallback(
-    debounce((value) => stableSetHistoricalHours(value), SLIDER_DEBOUNCE_MS),
+  const debouncedSetHistoricalHours = useMemo(
+    () => debounce((value) => stableSetHistoricalHours(value), SLIDER_DEBOUNCE_MS),
     [stableSetHistoricalHours]
   );
 
@@ -1042,9 +1053,7 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
       stableSetSelectedDetector(newDetector);
       if (historicalModeRef.current) {
         setIsTransitioning(true);
-        loadHistoricalData(historicalHours, newDetector).finally(() =>
-          setIsTransitioning(false)
-        );
+        loadHistoricalData(historicalHours, newDetector).finally(() => setIsTransitioning(false));
       }
     },
     [
@@ -1075,7 +1084,6 @@ const SpectrogramPage = React.memo(({ token, onLogout, darkMode, setDarkMode, ap
     });
     return srPeaks.sort((a, b) => a.freq - b.freq);
   }, [peakData, selectedDetector]);
-
 
   // --- Render Logic ---
   return (

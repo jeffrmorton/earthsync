@@ -123,14 +123,16 @@ const redisClient = new Redis({
   showFriendlyErrorStack: process.env.NODE_ENV !== 'production',
 });
 
-redisClient.on('error', (err) =>
-  logger.error(`Redis Client Error (${DETECTOR_ID})`, { error: err.message }) // Corrected interpolation
+redisClient.on(
+  'error',
+  (err) => logger.error(`Redis Client Error (${DETECTOR_ID})`, { error: err.message }) // Corrected interpolation
 );
 redisClient.on('connect', () => logger.info(`Redis client connecting... (${DETECTOR_ID})`)); // Corrected interpolation
 redisClient.on('ready', () => logger.info(`Redis client ready. (${DETECTOR_ID})`)); // Corrected interpolation
 redisClient.on('close', () => logger.warn(`Redis client connection closed. (${DETECTOR_ID})`)); // Corrected interpolation
-redisClient.on('reconnecting', (delay) =>
-  logger.warn(`Redis client reconnecting (delay: ${delay}ms)... (${DETECTOR_ID})`) // Corrected interpolation
+redisClient.on(
+  'reconnecting',
+  (delay) => logger.warn(`Redis client reconnecting (delay: ${delay}ms)... (${DETECTOR_ID})`) // Corrected interpolation
 );
 
 // --- Simulation Logic ---
@@ -237,18 +239,21 @@ async function publishSpectrogramBatch() {
 
   try {
     const messageId = await redisClient.xadd(REDIS_STREAM_KEY, '*', 'data', messageString);
-    logger.info(`Published successfully (${DETECTOR_ID})`, { // Corrected interpolation
+    logger.info(`Published successfully (${DETECTOR_ID})`, {
+      // Corrected interpolation
       messageId,
       batchSize: batch.length, // Will always be 1 now
     });
   } catch (err) {
-    logger.error(`Failed to publish to Redis stream (${DETECTOR_ID})`, { // Corrected interpolation
+    logger.error(`Failed to publish to Redis stream (${DETECTOR_ID})`, {
+      // Corrected interpolation
       error: err.message,
     });
     if (redisClient.status !== 'reconnecting' && redisClient.status !== 'connecting') {
       logger.warn(`Attempting explicit Redis reconnect due to publish error (${DETECTOR_ID})`); // Corrected interpolation
       redisClient.connect().catch((connectErr) => {
-        logger.error(`Explicit reconnect attempt failed (${DETECTOR_ID})`, { // Corrected interpolation
+        logger.error(`Explicit reconnect attempt failed (${DETECTOR_ID})`, {
+          // Corrected interpolation
           error: connectErr.message,
         });
       });
@@ -308,7 +313,8 @@ async function shutdownDetector(signal = 'UNKNOWN') {
       logger.info(`Redis connection already closed or closing for ${DETECTOR_ID}.`); // Corrected interpolation
     }
   } catch (err) {
-    logger.error(`Error during Redis graceful shutdown for ${DETECTOR_ID}:`, { // Corrected interpolation
+    logger.error(`Error during Redis graceful shutdown for ${DETECTOR_ID}:`, {
+      // Corrected interpolation
       error: err.message,
     });
     process.exitCode = 1;

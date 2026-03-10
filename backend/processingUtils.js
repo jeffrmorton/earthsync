@@ -92,7 +92,6 @@ function smooth(data, windowSize) {
   return smoothed;
 }
 
-
 // --- ANTI-ALIASING DOWNSAMPLE ---
 /**
  * Downsamples the raw spectrum using boxcar averaging to prevent aliasing.

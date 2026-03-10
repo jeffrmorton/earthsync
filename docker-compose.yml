@@ -1,4 +1,4 @@
-version: '3.8'
+
 
 networks:
   earthsync-network:
@@ -175,6 +175,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.47.2
+    profiles: [monitoring]
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -195,6 +196,7 @@ services:
 
   redis-exporter:
     image: oliver006/redis_exporter:v1.59.0
+    profiles: [monitoring]
     environment:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-password}
@@ -218,6 +220,7 @@ services:
 
   grafana:
     image: grafana/grafana:10.2.0
+    profiles: [monitoring]
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer

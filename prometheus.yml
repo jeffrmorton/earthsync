@@ -10,7 +10,7 @@ scrape_configs:
 
   - job_name: 'earthsync-server'
     static_configs:
-      - targets: ['server:3000']
+      - targets: ['backend:3000']
 
   - job_name: 'redis-exporter'
     static_configs:

@@ -45,7 +45,8 @@ function useApiClient(apiUrl, token, showSnackbar) {
     } catch (err) {
       // Key exchange failed - error will be handled by calling code
       const status = err.response?.status;
-      const errorMsg = `Key Exchange Failed: ${ // Corrected interpolation
+      const errorMsg = `Key Exchange Failed: ${
+        // Corrected interpolation
         err.response?.data?.error || (err.request ? 'Network Error' : err.message)
       }`;
       showSnackbar(errorMsg, 'error');
@@ -203,7 +204,8 @@ function useApiClient(apiUrl, token, showSnackbar) {
         const err = errWrapper.error || errWrapper;
         const type = errWrapper.type || 'general';
         const status = err.response?.status;
-        fetchError = `Failed to fetch historical ${type} data: ${ // Corrected interpolation
+        fetchError = `Failed to fetch historical ${type} data: ${
+          // Corrected interpolation
           err.response?.data?.error || (err.request ? 'Network Error' : err.message)
         }`;
         setHistoryError(fetchError);

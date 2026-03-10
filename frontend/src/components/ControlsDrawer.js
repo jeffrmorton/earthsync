@@ -169,14 +169,19 @@ const ControlsDrawer = React.memo(
 
           {/* Spectrogram View Controls */}
           <Box sx={{ px: 1 }}>
-            <Typography variant="overline" display="block" gutterBottom >
+            <Typography variant="overline" display="block" gutterBottom>
               Spectrogram View
             </Typography>
             <FormControl fullWidth sx={{ mb: 1.5 }}>
               <FormLabel id="plot-type-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
                 Plot Type
               </FormLabel>
-              <ButtonGroup variant="outlined" aria-labelledby="plot-type-label" fullWidth size="small">
+              <ButtonGroup
+                variant="outlined"
+                aria-labelledby="plot-type-label"
+                fullWidth
+                size="small"
+              >
                 <Button
                   onClick={() => setPlotType('3d')}
                   variant={plotType === '3d' ? 'contained' : 'outlined'}
@@ -222,13 +227,18 @@ const ControlsDrawer = React.memo(
               </Typography>
             </FormControl>
             <FormControl fullWidth sx={{ mb: 1.5 }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{mb: 0.5}}>
-                  <FormLabel id="time-window-label" sx={{ fontSize: '0.8rem' }}>
-                      Time Window
-                  </FormLabel>
-                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                      {displayTimeSeconds}s
-                  </Typography>
+              <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="center"
+                sx={{ mb: 0.5 }}
+              >
+                <FormLabel id="time-window-label" sx={{ fontSize: '0.8rem' }}>
+                  Time Window
+                </FormLabel>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  {displayTimeSeconds}s
+                </Typography>
               </Stack>
               <Slider
                 aria-labelledby="time-window-label"
@@ -241,9 +251,13 @@ const ControlsDrawer = React.memo(
                 valueLabelDisplay="auto"
                 size="small"
               />
-               <Typography variant="caption" id="time-window-desc" sx={{ mt: 0.5, color: 'text.secondary' }}>
-                 Plot length & Real-time view duration.
-               </Typography>
+              <Typography
+                variant="caption"
+                id="time-window-desc"
+                sx={{ mt: 0.5, color: 'text.secondary' }}
+              >
+                Plot length & Real-time view duration.
+              </Typography>
             </FormControl>
             <FormControl fullWidth sx={{ mb: 1.5 }}>
               <FormLabel id="colorscale-label" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
@@ -264,21 +278,30 @@ const ControlsDrawer = React.memo(
             </FormControl>
             <FormControlLabel
               control={
-                <Switch checked={normalize} onChange={() => setNormalize(!normalize)} size="small" />
+                <Switch
+                  checked={normalize}
+                  onChange={() => setNormalize(!normalize)}
+                  size="small"
+                />
               }
               label="Normalize Amplitude"
               sx={{ display: 'flex', alignItems: 'center', mb: 1 }}
             />
             {historicalMode && (
               <FormControl fullWidth sx={{ mb: 1.5 }}>
-                 <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{mb: 0.5}}>
-                     <FormLabel id="historical-hours-label" sx={{ fontSize: '0.8rem' }}>
-                         Historical Hours
-                     </FormLabel>
-                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                         {displayHistoricalHours}h
-                     </Typography>
-                 </Stack>
+                <Stack
+                  direction="row"
+                  justifyContent="space-between"
+                  alignItems="center"
+                  sx={{ mb: 0.5 }}
+                >
+                  <FormLabel id="historical-hours-label" sx={{ fontSize: '0.8rem' }}>
+                    Historical Hours
+                  </FormLabel>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    {displayHistoricalHours}h
+                  </Typography>
+                </Stack>
                 <Slider
                   aria-labelledby="historical-hours-label"
                   value={displayHistoricalHours}
@@ -296,8 +319,18 @@ const ControlsDrawer = React.memo(
           <Divider sx={{ my: 1.5 }} />
 
           {/* SR Peak Info Section - Adjust structure for flex grow */}
-          <Box sx={{ px: 1, display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 /* Allow shrinking if needed initially */ }}>
-            <Typography variant="overline" display="block" gutterBottom sx={{ flexShrink: 0 }}> {/* Prevent title shrinking */}
+          <Box
+            sx={{
+              px: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              flexGrow: 1,
+              minHeight: 0 /* Allow shrinking if needed initially */,
+            }}
+          >
+            <Typography variant="overline" display="block" gutterBottom sx={{ flexShrink: 0 }}>
+              {' '}
+              {/* Prevent title shrinking */}
               Schumann Resonance Peaks
             </Typography>
             {selectedDetector !== 'all' ? (
@@ -336,36 +369,55 @@ const ControlsDrawer = React.memo(
                   )}
                 </Typography>
                 {/* Scrollable Container for Peak List */}
-                <Box sx={{ flexGrow: 1, overflowY: 'auto', pr: 0.5 }}> {/* Add slight right padding for scrollbar */}
-                  {(isLoadingData || isTransitioning) ? (
-                     <Box sx={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%'}}>
-                         <CircularProgress size={20} />
-                     </Box>
+                <Box sx={{ flexGrow: 1, overflowY: 'auto', pr: 0.5 }}>
+                  {' '}
+                  {/* Add slight right padding for scrollbar */}
+                  {isLoadingData || isTransitioning ? (
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        height: '100%',
+                      }}
+                    >
+                      <CircularProgress size={20} />
+                    </Box>
                   ) : schumannPeaks && schumannPeaks.length > 0 ? (
-                     schumannPeaks.map((peak, index) => (
-                      <Typography key={index} variant="caption" display="block" sx={{ mb: 0.5, pl: '10px' /* Indent slightly */ }}>
+                    schumannPeaks.map((peak, index) => (
+                      <Typography
+                        key={index}
+                        variant="caption"
+                        display="block"
+                        sx={{ mb: 0.5, pl: '10px' /* Indent slightly */ }}
+                      >
                         {`F: ${peak.freq.toFixed(2)}, A: ${peak.amp.toFixed(1)}, Q: ${peak.qFactor ? peak.qFactor.toFixed(1) : 'N/A'}, S: ${peak.trackStatus === 'new' ? 'New' : 'Cont.'}`}
                       </Typography>
                     ))
                   ) : (
-                      <Typography variant="caption" sx={{ color: 'text.secondary', pl: '10px' }}>
-                         {schumannPeaks === null ? 'Select detector' : 'No SR peaks detected.'}
-                      </Typography>
+                    <Typography variant="caption" sx={{ color: 'text.secondary', pl: '10px' }}>
+                      {schumannPeaks === null ? 'Select detector' : 'No SR peaks detected.'}
+                    </Typography>
                   )}
                 </Box>
               </Box>
             ) : (
               <Typography
                 variant="caption"
-                sx={{ color: 'text.secondary', fontStyle: 'italic', px: 1, mb: 2, display: 'block' }}
+                sx={{
+                  color: 'text.secondary',
+                  fontStyle: 'italic',
+                  px: 1,
+                  mb: 2,
+                  display: 'block',
+                }}
               >
                 Select a specific detector to view SR peak information.
               </Typography>
             )}
           </Box>
-
-        </Box> {/* End Scrollable Controls Area */}
-
+        </Box>{' '}
+        {/* End Scrollable Controls Area */}
         {/* Globe Section (Fixed at bottom) */}
         <Box
           sx={{
@@ -374,7 +426,7 @@ const ControlsDrawer = React.memo(
             justifyContent: 'center',
             borderTop: `1px solid ${theme.palette.divider}`,
             flexShrink: 0, // Keep globe fixed size
-            mt: 'auto' // Push globe to the bottom
+            mt: 'auto', // Push globe to the bottom
           }}
         >
           {drawerOpen && (

@@ -1,40 +1,42 @@
-# EarthSync Project (v1.1.8)
+# EarthSync Project (v1.1.29)
 
 ## Overview
-EarthSync simulates, distributes, ingests, and visualizes time-series geospatial data, modeling Schumann Resonances (SR). It features a React **frontend**, Node.js **backend** (API/WebSocket/Ingest), Node.js **detectors**, Redis, PostgreSQL, and Prometheus/Grafana monitoring.
+EarthSync simulates, distributes, ingests, and visualizes time-series geospatial data, modeling Schumann Resonances (SR). It features a React **frontend** (v1.1.11), Node.js **backend** (v1.1.29, API/WebSocket/Ingest), Node.js **detectors**, Redis, PostgreSQL, and Prometheus/Grafana monitoring. All 10 services are orchestrated via Docker Compose.
 
-**Version 1.1.8** introduces enhanced server-side peak detection (smoothing, prominence, configurable parameters), client-side visualization of historical peak trends (Frequency, Amplitude, Q-Factor), improved error feedback, and minor globe enhancements. Includes CI test fixes (v1.1.8a).
+**Version 1.1.29** includes enhanced server-side peak detection (smoothing, prominence, parabolic interpolation), peak tracking with persistent UUIDs, broadband/narrowband transient detection, Redis-to-PostgreSQL archival, client-side visualization of historical peak trends (Frequency, Amplitude, Q-Factor), and improved error feedback.
 
 ## API Documentation
-See `backend/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major API *endpoint* changes from v1.1.7, but the underlying peak detection is improved.
+See `backend/openapi.yaml` for the OpenAPI 3.0 specification. Routes are mounted with prefixes: auth at `/api/auth`, history at `/api/history`, ingest at `/api/data-ingest`, misc at `/`.
 
-## Features (v1.1.8)
+## Features (v1.1.29)
 -   **Real-time 3D Visualization**: Plotly.js surface plot showing processed (downsampled) spectrogram data.
 -   **Server-Side Analysis**:
-    -   **Enhanced Peak Detection**: Now uses smoothing, prominence checks, minimum distance filtering, and absolute thresholding on **raw** data for more robust peak finding. Configurable via `backend/.env`.
-    -   Q-Factor estimation with interpolation.
-    -   Detected peaks (Freq, Amp, Q-Factor) sent via WebSocket and stored historically.
-    -   Placeholders for future peak tracking and transient detection logic.
--   **Data Ingest API**: Secure `/data-ingest` endpoint accepts batches of **raw** external sensor data (5501 points per spectrum).
+    -   **Enhanced Peak Detection**: Smoothing, prominence checks, minimum distance filtering, absolute thresholding, and parabolic interpolation for sub-bin precision on **raw** data. Configurable via `backend/.env`.
+    -   Q-Factor estimation via FWHM.
+    -   **Peak Tracking**: Persistent UUID-based peak tracking across time steps with frequency tolerance matching. State persisted in PostgreSQL.
+    -   **Transient Detection**: Broadband (global amplitude spike) and narrowband (localized frequency spike) transient detection using median baseline from recent Redis history.
+    -   Detected peaks (Freq, Amp, Q-Factor, trackId, trackStatus) and transient info sent via WebSocket and stored historically.
+-   **Data Ingest API**: Secure `POST /api/data-ingest` endpoint accepts batches of **raw** external sensor data (5501 points per spectrum). Requires `X-API-Key` header.
 -   **Responsive Chart & Globe**:
-    -   Interactive spectrogram visualization.
+    -   Interactive spectrogram visualization (2D heatmap and 3D surface).
     -   Globe shows detector locations; point color varies subtly with recent average peak amplitude. Tooltips show latest peak details.
 -   **Historical Data & Visualization**:
-    -   Retrieve downsampled spectrogram data via `/history/:hours`.
-    -   Retrieve detected peak data (Freq, Amp, Q-Factor, Timestamp) via `/history/peaks/:hours`.
-    -   **New:** Frontend displays 2D line charts of historical peak Frequency, Amplitude, and Q-Factor vs. Time for the selected detector.
-    -   Data cached in Redis (Spectrograms in Lists, Peaks in Sorted Sets).
--   **Multi-Detector Support**: Simulators run by default; augment/replace via the ingest API.
--   **User Authentication**: JWT-based registration/login.
--   **Encrypted WebSockets**: Real-time data (downsampled spectrogram + peaks) streaming (AES-256-CBC).
--   **Stateless Server (Keys)**: User encryption keys stored in Redis.
+    -   Retrieve downsampled spectrogram data via `GET /api/history/hours/:hours` or `/api/history/range`.
+    -   Retrieve detected peak data (Freq, Amp, Q-Factor, trackId, trackStatus) via `GET /api/history/peaks/hours/:hours` or `/api/history/peaks/range`.
+    -   Frontend displays 2D line charts of historical peak Frequency, Amplitude, and Q-Factor vs. Time grouped by Schumann mode with track segmentation.
+    -   Data cached in Redis (Spectrograms in Lists, Peaks in Sorted Sets), archived to PostgreSQL.
+-   **Data Archival**: Background archiver periodically moves old data from Redis to PostgreSQL to manage Redis memory.
+-   **Multi-Detector Support**: 3 simulators (NYC, London, Sydney) run by default; augment/replace via the ingest API.
+-   **User Authentication**: JWT-based registration (`POST /api/auth/register`) and login (`POST /api/auth/login`).
+-   **Encrypted WebSockets**: Real-time data (downsampled spectrogram + peaks + transient info) streaming (AES-256-CBC per-user encryption).
+-   **Stateless Server (Keys)**: User encryption keys stored in Redis with 1-hour TTL.
 -   **Client Controls & Persistence**: Settings persist in `localStorage`.
--   **Improved Feedback**: Loading indicators, WS status, more specific Snackbar alerts.
--   **Backend Improvements**: Input validation, centralized error handling.
--   **Configurable Logging & Peak Detection**: Via `.env` files.
--   **Monitoring**: Prometheus & Grafana dashboard includes ingest, peak detection, and Redis metrics.
--   **CI/CD**: GitHub Actions workflow builds and tests core features (timeouts adjusted).
--   **Dockerized**: Full stack defined in `docker-compose.yml`.
+-   **Improved Feedback**: Loading indicators, WS status, transient pulse animation, more specific Snackbar alerts.
+-   **Backend Improvements**: Input validation, centralized error handling, graceful shutdown.
+-   **Configurable Logging, Peak Detection & Transient Detection**: Via `.env` files.
+-   **Monitoring**: Prometheus & Grafana dashboard includes ingest, peak detection, transient detection, archival, and Redis metrics.
+-   **CI/CD**: GitHub Actions workflow builds and tests core features.
+-   **Dockerized**: Full stack (10 services) defined in `docker-compose.yml` with health checks and resource limits.
 
 ## Prerequisites
 -   Docker & Docker Compose (v2 recommended)
@@ -47,33 +49,45 @@ See `backend/openapi.yaml` (v1.1.8) for the OpenAPI 3.0 specification. No major 
 2.  `cd earthsync`
 3.  **(IMPORTANT)** If upgrading, clean up old volumes: `docker compose down -v`
 4.  Review `.env` files (especially `backend/.env` for `API_INGEST_KEY` and peak detection parameters).
-5.  `docker compose up --build -d`
+5.  `docker compose up --build -d` (core services only)
+6.  With monitoring: `docker compose --profile monitoring up --build -d`
 
 ## Usage
--   **Frontend**: `http://localhost:3001` (Register/Login, view real-time or historical data, including new peak charts in historical mode).
+-   **Frontend**: `http://localhost:3001` (Register/Login, view real-time or historical data, including peak charts in historical mode).
 -   **API**: `http://localhost:3000`
--   **Data Ingest**: `POST http://localhost:3000/data-ingest` (Requires `X-API-Key` header and valid JSON body - see `openapi.yaml`).
+-   **Data Ingest**: `POST http://localhost:3000/api/data-ingest` (Requires `X-API-Key` header and valid JSON body - see `openapi.yaml`).
 -   **Prometheus**: `http://localhost:9090`
 -   **Grafana**: `http://localhost:3002` (Anonymous Viewer access)
 -   **Logs**: `docker compose logs -f <service_name>` (e.g. `backend`, `frontend`)
 
 ## Stopping
--   `docker compose down`
--   `docker compose down -v` (**Deletes all data**)
+-   `docker compose down` (core services)
+-   `docker compose --profile monitoring down` (includes monitoring)
+-   `docker compose --profile monitoring down -v` (**Deletes all data**)
 
 ## Configuration
 -   Managed via `.env` files and `docker-compose.yml`.
 -   Set `API_INGEST_KEY` in `backend/.env`.
--   Adjust peak detection parameters in `backend/.env`:
+-   **Peak detection** parameters in `backend/.env`:
     -   `PEAK_SMOOTHING_WINDOW`: Points for moving average (odd integer, default 5).
     -   `PEAK_PROMINENCE_FACTOR`: Sensitivity relative to local noise (float > 0, default 1.5).
     -   `PEAK_MIN_DISTANCE_HZ`: Minimum frequency separation between peaks (float > 0, default 1.0).
     -   `PEAK_ABSOLUTE_THRESHOLD`: Minimum amplitude for a peak candidate (float >= 0, default 1.0).
     -   `PEAK_TRACKING_FREQ_TOLERANCE_HZ`: Hz tolerance for tracking same peak (float, default 0.5).
-    -   `PEAK_TRACKING_STATE_TTL_SECONDS`: Timeout to clear old tracking state (int, default 300).
+-   **Transient detection** parameters in `backend/.env`:
+    -   `TRANSIENT_HISTORY_LOOKBACK`: Number of recent spectra for baseline (int, default 5).
+    -   `TRANSIENT_BROADBAND_FACTOR`: Multiplier for broadband threshold (float, default 3.0).
+    -   `TRANSIENT_BROADBAND_THRESHOLD_PCT`: Min percentage of bins above threshold (float, default 0.10).
+    -   `TRANSIENT_NARROWBAND_FACTOR`: Multiplier for narrowband threshold (float, default 5.0).
+    -   `TRANSIENT_NARROWBAND_IGNORE_HZ`: Hz range around known SR peaks to ignore (float, default 1.5).
+-   **Data retention** in `backend/.env`:
+    -   `REDIS_SPEC_RETENTION_HOURS`: Hours to keep spectrograms in Redis before archiving (default 24).
+    -   `REDIS_PEAK_RETENTION_HOURS`: Hours to keep peaks in Redis before archiving (default 72).
+    -   `CLEANUP_INTERVAL_MS`: Archival task interval in milliseconds (default 3600000).
 
 ## Monitoring Details
--   Grafana Dashboard updated to reflect metrics accurately, including peak detection rate, ingest stats, and Redis peak history size.
+-   **Profile**: Monitoring services (`prometheus`, `redis-exporter`, `grafana`) use the `monitoring` profile. Start with `docker compose --profile monitoring up -d`.
+-   Grafana Dashboard includes HTTP request rate, latency (P95), WebSocket connections, Redis key counts, spectrogram history length, peak detection rate, data ingest rate, and peak history size.
 
 ## Adding More Simulated Detectors
 (Same as before - involves updating `docker-compose.yml`, optionally `prometheus.yml`, Grafana queries, and `redis-exporter` config).

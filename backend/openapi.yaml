@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: EarthSync Server API
-  description: API for managing users, key exchange, data ingest, and historical data retrieval (spectrograms and peaks). Includes enhanced server-side peak detection and basic transient detection. Archives older data to database. Returns structured, timestamped spectrogram history.
-  version: 1.1.14 # Version bump reflects history API change
+  description: API for managing users, key exchange, data ingest, and historical data retrieval (spectrograms and peaks). Includes enhanced server-side peak detection with parabolic interpolation, UUID-based peak tracking, broadband/narrowband transient detection, and Redis-to-PostgreSQL archival. Returns structured, timestamped spectrogram history.
+  version: 1.1.29 # Matches backend package.json
 
 servers:
   - url: http://localhost:3000 # Modified to remove backticks for compatibility
@@ -31,7 +31,7 @@ paths:
           content:
             application/json: { $ref: '#/components/schemas/ErrorResponse' }
 
-  /register:
+  /api/auth/register:
     post:
       summary: Register a new user
       tags: [Authentication]
@@ -47,7 +47,7 @@ paths:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
-  /login:
+  /api/auth/login:
     post:
       summary: Log in a user
       tags: [Authentication]
@@ -74,7 +74,7 @@ paths:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
-  /data-ingest:
+  /api/data-ingest:
     post:
       summary: Ingest a batch of raw spectrogram data from an external source
       tags: [Data]
@@ -98,7 +98,7 @@ paths:
         '500': { $ref: '#/components/responses/InternalServerError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
-  /history/hours/{hours}:
+  /api/history/hours/{hours}:
     get:
       summary: Retrieve historical spectrogram data (structured, timestamped)
       tags: [Data]
@@ -121,7 +121,7 @@ paths:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
-  /history/range:
+  /api/history/range:
     get:
       summary: Retrieve historical spectrogram data by time range (structured, timestamped)
       tags: [Data]
@@ -149,7 +149,7 @@ paths:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
-  /history/peaks/hours/{hours}:
+  /api/history/peaks/hours/{hours}:
     get:
       summary: Retrieve historical detected peak data
       tags: [Data]
@@ -172,7 +172,7 @@ paths:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
-  /history/peaks/range:
+  /api/history/peaks/range:
     get:
       summary: Retrieve historical detected peak data by time range
       tags: [Data]

@@ -1,0 +1,23 @@
+{
+    "name": "earthsync",
+    "version": "1.1.29",
+    "private": true,
+    "description": "Dockerized platform for simulating, ingesting, processing, and visualizing Schumann Resonance data",
+    "workspaces": [
+        "backend",
+        "frontend",
+        "detectors"
+    ],
+    "scripts": {
+        "lint": "npm run lint --workspaces --if-present",
+        "lint:backend": "npm run lint --workspace=backend",
+        "lint:frontend": "npm run lint --workspace=frontend",
+        "lint:detectors": "npm run lint --workspace=detectors",
+        "format": "npm run format --workspaces --if-present",
+        "format:check": "npm run format:check --workspaces --if-present",
+        "test": "npm run test --workspaces --if-present",
+        "test:backend": "npm run test --workspace=backend",
+        "test:frontend": "npm run test --workspace=frontend"
+    },
+    "license": "MIT"
+}

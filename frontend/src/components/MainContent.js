@@ -56,7 +56,8 @@ const MainContent = React.memo(
     const mainPlotHeight = showHistoricalChart ? '60%' : '100%';
 
     // Determine if the initial loading indicator should be shown
-    const showInitialLoader = (isLoadingData || isTransitioning) && Object.keys(spectrogramData).length === 0;
+    const showInitialLoader =
+      (isLoadingData || isTransitioning) && Object.keys(spectrogramData).length === 0;
 
     // Determine if the transition overlay should be shown
     const showTransitionLoader = isTransitioning && !showInitialLoader;
@@ -136,7 +137,7 @@ const MainContent = React.memo(
                   onRelayout={handlePlotRelayout}
                 />
               </Box>
-          )}
+            )}
 
           {/* No Data Message */}
           {!showInitialLoader &&
@@ -147,7 +148,7 @@ const MainContent = React.memo(
               <Typography sx={{ textAlign: 'center', mt: 4, color: 'text.secondary' }}>
                 No spectrogram data available for the selected detector(s) and time range.
               </Typography>
-          )}
+            )}
 
           {/* --- Transition Loading Overlay --- */}
           <Fade in={showTransitionLoader} timeout={300}>

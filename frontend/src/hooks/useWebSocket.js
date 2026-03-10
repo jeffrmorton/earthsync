@@ -244,7 +244,7 @@ function useWebSocket(
           }
         };
 
-        currentWsInstance.onerror = (error) => {
+        currentWsInstance.onerror = (_error) => {
           // WebSocket error handled by snackbar below
           if (wsRef.current === currentWsInstance) {
             setWsStatus(WebSocketStatus.ERROR);

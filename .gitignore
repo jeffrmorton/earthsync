@@ -1,6 +1,9 @@
 # EarthSync Project - Comprehensive .gitignore
 # ================================================
 
+# Agent instruction files
+CLAUDE.md
+
 # Node.js Dependencies
 # ====================
 node_modules/
