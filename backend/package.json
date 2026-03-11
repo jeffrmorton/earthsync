@@ -27,7 +27,9 @@
     "lint:fix": "eslint . --ext .js --fix",
     "format": "prettier --write \"**/*.{js,json,yaml,yml}\"",
     "format:check": "prettier --check \"**/*.{js,json,yaml,yml}\"",
-    "test": "NODE_ENV=test jest --verbose --detectOpenHandles --forceExit"
+    "test": "NODE_ENV=test jest --verbose --detectOpenHandles --forceExit",
+    "test:unit": "NODE_ENV=test jest processing.test.js --verbose --forceExit",
+    "test:integration": "NODE_ENV=test jest integration.test.js --verbose --detectOpenHandles --forceExit"
   },
   "devDependencies": {
     "axios": "^1.7.7",

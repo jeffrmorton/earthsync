@@ -95,6 +95,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // --- Express App Setup ---
 const app = express();
+app.set('trust proxy', 1); // Trust first proxy (nginx) for correct client IP in rate limiting
 const server = http.createServer(app);
 
 // --- Security Middleware ---

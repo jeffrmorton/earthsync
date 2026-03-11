@@ -15,9 +15,10 @@
         "lint:detectors": "npm run lint --workspace=detectors",
         "format": "npm run format --workspaces --if-present",
         "format:check": "npm run format:check --workspaces --if-present",
-        "test": "npm run test --workspaces --if-present",
-        "test:backend": "npm run test --workspace=backend",
-        "test:frontend": "npm run test --workspace=frontend"
+        "test": "npm run test:unit --workspaces --if-present",
+        "test:backend": "npm run test:unit --workspace=backend",
+        "test:frontend": "npm run test --workspace=frontend",
+        "test:integration": "docker compose exec -T backend sh -c 'NODE_ENV=test npx jest integration.test.js --verbose --detectOpenHandles --forceExit'"
     },
     "license": "MIT"
 }

@@ -27,7 +27,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
 
   // --- Fetch Encryption Key ---
   const fetchKey = useCallback(async () => {
-    if (!token || !apiUrl) {
+    if (!token || apiUrl === null || apiUrl === undefined) {
       setEncryptionKey(null);
       return;
     }
@@ -63,7 +63,7 @@ function useApiClient(apiUrl, token, showSnackbar) {
   // --- Fetch Historical Data ---
   const loadHistoricalData = useCallback(
     async (hours, detectorId) => {
-      if (!token || !apiUrl) {
+      if (!token || apiUrl === null || apiUrl === undefined) {
         setHistoryError('Missing token or API URL');
         showSnackbar('Cannot load history: Missing token or API URL.', 'error');
         return;

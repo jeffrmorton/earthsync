@@ -4,16 +4,20 @@
  */
 
 // --- Environment Variables ---
-const REACT_APP_API_BASE_URL = window.REACT_APP_API_BASE_URL || 'http://localhost:3000';
-const REACT_APP_WS_URL = window.REACT_APP_WS_URL || 'ws://localhost:3000';
+// API base URL — empty string means same-origin (requests proxied by nginx)
+const REACT_APP_API_BASE_URL = window.REACT_APP_API_BASE_URL || '';
+// WebSocket URL — derived from current page origin, routed through /ws/ nginx proxy
+const _wsProtocol = window.location?.protocol === 'https:' ? 'wss:' : 'ws:';
+const _wsHost = window.location?.host || 'localhost:3080';
+const REACT_APP_WS_URL = window.REACT_APP_WS_URL || `${_wsProtocol}//${_wsHost}/ws/`;
 
 const API_URL_FROM_ENV = REACT_APP_API_BASE_URL;
 const WS_URL_FROM_ENV = REACT_APP_WS_URL;
 
 export const DEFAULT_API_BASE_URL = API_URL_FROM_ENV;
 export const DEFAULT_WS_URL = WS_URL_FROM_ENV;
-export const FALLBACK_API_BASE_URL = 'http://localhost:3000';
-export const FALLBACK_WS_URL = 'ws://localhost:3000';
+export const FALLBACK_API_BASE_URL = '';
+export const FALLBACK_WS_URL = `${_wsProtocol}//${_wsHost}/ws/`;
 
 // --- Layout Constants ---
 export const DRAWER_WIDTH = 300;

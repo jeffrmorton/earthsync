@@ -7,6 +7,7 @@
  * Fixes heatmap time direction and adds axis titles. Implements UI polish.
  * Uses useWebSocket and useApiClient hooks for logic encapsulation.
  * Uses centralized constants. No backslash escapes in template literals.
+ * Supports REACT_APP_DEV_AUTO_LOGIN for automatic dev login.
  */
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import PropTypes from 'prop-types';
@@ -176,6 +177,47 @@ function App() {
       })
       .finally(() => setIsLoading(false));
   }, []);
+
+  // --- Dev Auto-Login ---
+  useEffect(() => {
+    // eslint-disable-next-line no-undef
+    const devAutoLogin = process.env.REACT_APP_DEV_AUTO_LOGIN === 'true';
+    if (!devAutoLogin || !serverUrls || token) return;
+
+    const DEV_USER = 'admin';
+    const DEV_PASS = 'admin';
+
+    async function autoLogin() {
+      try {
+        // Try login first
+        const loginRes = await axios.post(`${serverUrls.apiUrl}/api/auth/login`, {
+          username: DEV_USER,
+          password: DEV_PASS,
+        });
+        localStorage.setItem(LS_KEY_AUTH_TOKEN, loginRes.data.token);
+        setToken(loginRes.data.token);
+      } catch {
+        // If login fails, register then login
+        try {
+          await axios.post(`${serverUrls.apiUrl}/api/auth/register`, {
+            username: DEV_USER,
+            password: DEV_PASS,
+          });
+          const loginRes = await axios.post(`${serverUrls.apiUrl}/api/auth/login`, {
+            username: DEV_USER,
+            password: DEV_PASS,
+          });
+          localStorage.setItem(LS_KEY_AUTH_TOKEN, loginRes.data.token);
+          setToken(loginRes.data.token);
+        } catch (regErr) {
+          // eslint-disable-next-line no-console
+          console.error('Dev auto-login failed:', regErr.message);
+        }
+      }
+    }
+
+    autoLogin();
+  }, [serverUrls, token]);
 
   // --- Event Handlers ---
   const handleAuthAction = async (e, action) => {

@@ -53,11 +53,9 @@ See `backend/openapi.yaml` for the OpenAPI 3.0 specification. Routes are mounted
 6.  With monitoring: `docker compose --profile monitoring up --build -d`
 
 ## Usage
--   **Frontend**: `http://localhost:3001` (Register/Login, view real-time or historical data, including peak charts in historical mode).
--   **API**: `http://localhost:3000`
--   **Data Ingest**: `POST http://localhost:3000/api/data-ingest` (Requires `X-API-Key` header and valid JSON body - see `openapi.yaml`).
--   **Prometheus**: `http://localhost:9090`
--   **Grafana**: `http://localhost:3002` (Anonymous Viewer access)
+-   **Frontend**: `http://localhost:3080` (Register/Login, view real-time or historical data, including peak charts in historical mode).
+-   **API / Data Ingest**: Not exposed on host; accessible only within the Docker network. Use the frontend or `docker compose exec` for direct access.
+-   **Grafana**: `http://localhost:3082` (Anonymous Viewer access, monitoring profile only)
 -   **Logs**: `docker compose logs -f <service_name>` (e.g. `backend`, `frontend`)
 
 ## Stopping

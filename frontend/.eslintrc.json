@@ -38,5 +38,13 @@
     "eqeqeq": ["error", "always"],
     "prefer-const": "warn"
   },
+  "overrides": [
+    {
+      "files": ["**/*.test.js", "**/*.test.jsx", "**/*.spec.js", "**/*.spec.jsx"],
+      "env": {
+        "jest": true
+      }
+    }
+  ],
   "ignorePatterns": ["build/", "node_modules/", "!.prettierrc.json", "reportWebVitals.js", "setupTests.js"]
 }
