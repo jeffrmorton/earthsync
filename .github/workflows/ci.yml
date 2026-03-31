@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: cd server && uv sync --dev && uv run ruff check src/ tests/
+      - run: cd simulator && uv sync --dev && uv run ruff check src/ tests/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd web && corepack enable && pnpm install && pnpm lint
+
+  test-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: cd server && uv sync --dev && uv run pytest --cov=earthsync_server --cov-fail-under=100
+
+  test-simulator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: cd simulator && uv sync --dev && uv run pytest --cov=earthsync_simulator --cov-fail-under=100
+
+  test-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd web && corepack enable && pnpm install && pnpm test:coverage
+
+  typecheck-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: |
+          cd server && uv sync --dev
+          uv run pyright src/
+
+  typecheck-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd web && corepack enable && pnpm install && pnpm typecheck
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: |
+          cd server && uv sync --dev
+          uv run bandit -r src/ -c ../bandit.yaml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd web && corepack enable && pnpm install && pnpm audit --audit-level=high || true
+
+  dead-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: |
+          cd server && uv sync --dev
+          uv run vulture src/ ../vulture_whitelist.py --min-confidence 80
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test-server, test-simulator, test-web, typecheck-python, typecheck-web, security, dead-code]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd web && corepack enable && pnpm install && pnpm build

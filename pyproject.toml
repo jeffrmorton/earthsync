@@ -1,0 +1,24 @@
+[project]
+name = "earthsync"
+version = "0.1.1"
+description = "Open-source citizen science platform for distributed Schumann Resonance monitoring"
+requires-python = ">=3.13"
+
+[tool.uv.workspace]
+members = ["server", "simulator", "firmware"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "S", "B", "A", "C4", "DTZ", "T20", "ICN", "PIE", "PT", "RSE", "RET", "SLF", "SIM", "TID", "TCH", "ARG", "PTH", "ERA", "PL", "TRY", "FLY", "PERF", "RUF"]
+ignore = ["S101", "PLR2004", "TRY003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "PLR2004", "ARG001", "ARG002", "SLF001", "PLC0415", "SIM117"]
+"**/tests/**" = ["S101", "S105", "S106", "PLR2004", "ARG001", "ARG002", "SLF001", "PLC0415", "SIM117"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

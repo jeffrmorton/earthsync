@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.venv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+*.egg
+
+# Node
+node_modules/
+web/dist/
+web/coverage/
+pnpm-lock.yaml
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+.dockerignore
+
+# Database
+*.db
+*.sqlite*
+dump.rdb
+appendonly.aof
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI agent instructions
+CLAUDE.md
+.cursorrules
+.cursor/
+.github/copilot-instructions.md
+.windsurfrules
+.clinerules
+.aider*
+.continue/
+.bolt/
+.codeium/
+.tabnine/
+.sourcery.yaml
+.cody/
+.augment/
+.roo/
+.idx/
+
+# Build/coverage
+build/
+*.tsbuildinfo
+*.lcov
+coverage/
+test-results/
+uv.lock

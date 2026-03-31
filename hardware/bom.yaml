@@ -1,0 +1,459 @@
+# EarthSync Station Bill of Materials
+# Citizen Science Schumann Resonance Monitoring Station
+#
+# Based on:
+#   - Christofilakis, V. et al. (2018). "A Low-Cost Receiver for Schumann Resonance Observations."
+#     IEEE Trans. Antennas Propag., 67(9), 5845-5854.
+#   - Gazquez Parra, J.A. et al. (2015). "New design of a low-cost system for Schumann
+#     resonance measurements." Measurement Science and Technology.
+#   - Tatsis, G. et al. (2020). "Design and Implementation of a Test Platform for ELF
+#     Schumann Resonance Receivers." Electronics, 9(6), 895.
+#   - Sierra Luna, S.A. et al. (2017). "A portable Schumann-resonance station."
+#     Annals of Geophysics, 60(6), S0655.
+#
+# Last updated: 2026-03-28
+# See STATION_OPTIONS.md for a full comparison of all hardware tiers.
+version: "0.1.1"
+total_cost_range: "$250-400"
+currency: USD
+
+# ---------------------------------------------------------------------------
+# HARDWARE TIERS OVERVIEW
+# ---------------------------------------------------------------------------
+# This BOM details the Tier 2 (Budget Standalone) build. See STATION_OPTIONS.md
+# for the full range of options from $50 to $30,000+.
+tiers:
+  - tier: 1
+    name: "Minimum Viable"
+    cost_range: "$50-80"
+    summary: >
+      DIY induction coil + PC sound card. Proves SR detection with zero
+      investment beyond wire and core material. No standalone operation.
+      Proven by vlf.it Cumiana station (operational since 2011).
+  - tier: 2
+    name: "Budget Standalone"
+    cost_range: "$250-400"
+    summary: >
+      DIY mu-metal induction coil + OPA209 preamp + ADS1256 ADC +
+      Raspberry Pi Zero 2W + GPS PPS timing. Fully autonomous, solar-capable,
+      uploads to the EarthSync network. This BOM describes this tier in detail.
+  - tier: 3
+    name: "Recommended"
+    cost_range: "$800-1,500"
+    summary: >
+      Two options: (A) DIY sensor + Symmetric Research USB4CH DAQ ($1,000-1,100),
+      or (B) MSI MC910 commercial sensor + ADS1263 HAT ($500-600). Both use
+      Raspberry Pi 5 with GPS PPS. Significantly better data quality than Tier 2.
+  - tier: 4
+    name: "Research Grade"
+    cost_range: "$3,500-7,000"
+    summary: >
+      Zonge ANT/4 or equivalent research induction coil + Symmetric Research
+      USB8CH DAQ + precision GPS timing. Matches HeartMath GCMS quality.
+      Publishable data.
+  - tier: 5
+    name: "Full Observatory"
+    cost_range: "$15,000-30,000+"
+    summary: >
+      Three-axis sensors (2x horizontal induction coils + vertical E-field),
+      GNSS disciplined oscillator, ruggedized computing, NIST-traceable
+      calibration. Permanent geophysical installation.
+
+components:
+  # ---------------------------------------------------------------------------
+  # SENSOR
+  # ---------------------------------------------------------------------------
+  - category: Sensor
+    name: Induction Coil Magnetometer
+    description: >
+      Mu-metal core (relative permeability mu ~2x10^5), wound with 40,000+
+      turns of 0.2 mm (AWG 32) enameled copper magnet wire. The core acts as
+      a flux concentrator, boosting the effective area of the coil by a factor
+      proportional to its permeability and geometry.
+    specifications:
+      core_material: "Mu-metal (Ni-Fe alloy, mu_r >= 2x10^5)"
+      core_diameter: "10-12 mm"
+      core_length_portable: "20-30 cm"
+      core_length_fixed: "up to 1.35 m (higher sensitivity)"
+      wire_gauge: "0.2 mm / AWG 32 enameled copper"
+      turns: "40,000-80,000"
+      coil_resistance_typical: "2-6 kohm"
+      coil_inductance_typical: "50-200 H"
+      sensitivity_target: ">= 1 mV/pT at 7.83 Hz"
+    cost: "$50-150"
+    notes: >
+      Core length is the primary tradeoff between portability and sensitivity.
+      A 30 cm core with 50,000 turns yields approximately 1-2 mV/pT at the
+      fundamental Schumann frequency. Longer cores (1+ m) as used by
+      Christofilakis et al. yield higher sensitivity but are impractical for
+      portable deployment. Winding must be tight and even to minimize
+      distributed capacitance (self-resonant frequency should be > 100 Hz).
+    references:
+      - "Christofilakis et al. 2018"
+      - "Tatsis et al. 2020"
+      - "Sierra Luna et al. 2017"
+
+  # ---------------------------------------------------------------------------
+  # PREAMPLIFIER
+  # ---------------------------------------------------------------------------
+  - category: Preamplifier
+    name: OPA209 Ultra-Low-Noise Precision Op-Amp
+    description: >
+      First-stage preamplifier providing 40-60 dB of gain with
+      ultra-low voltage noise density. Configured as a non-inverting
+      amplifier with DC-blocking capacitor on the input.
+    specifications:
+      voltage_noise_density: "3.3 nV/sqrt(Hz)"
+      current_noise_density: "3.5 pA/sqrt(Hz)"
+      gain_bandwidth_product: "18 MHz"
+      supply_voltage: "+/-2.25 V to +/-18 V"
+      operating_current: "3.6 mA typical"
+      package: "SOIC-8"
+    cost: "$8-12"
+    quantity: 1
+    alternatives:
+      - name: "AD797"
+        noise: "0.9 nV/sqrt(Hz)"
+        notes: "Lower noise but higher cost (~$15), higher supply current"
+      - name: "LT1028"
+        noise: "0.85 nV/sqrt(Hz)"
+        notes: "Excellent noise, but high current noise (1 pA/sqrt(Hz))"
+      - name: "OPA1612"
+        noise: "1.1 nV/sqrt(Hz)"
+        notes: "Very low noise, dual package available, good alternative"
+    notes: >
+      The OPA209 offers an excellent balance of low voltage noise, low
+      current noise, and moderate cost. For high-impedance coil sources
+      (2-6 kohm), current noise contribution matters; OPA209's 3.5 pA/sqrt(Hz)
+      is acceptable. For very high turn-count coils (>100 kohm), consider
+      JFET-input alternatives.
+    references:
+      - "Texas Instruments OPA209 datasheet"
+      - "Tatsis et al. 2020"
+
+  - category: Preamplifier
+    name: Passive Components (Preamp Stage)
+    description: >
+      Precision resistors and capacitors for the preamplifier feedback
+      network, DC-blocking input, and power supply decoupling.
+    items:
+      - "2x 1% metal-film resistors (gain-setting, values per design)"
+      - "1x 1 uF film capacitor (DC-blocking input)"
+      - "4x 100 nF MLCC decoupling capacitors (C0G/NP0 preferred)"
+      - "2x 10 uF tantalum capacitors (supply rail bulk decoupling)"
+      - "1x 100 uF electrolytic capacitor (power entry)"
+    cost: "$3-5"
+    quantity: 1
+    notes: "Use C0G/NP0 dielectric for signal-path capacitors to avoid microphonics."
+
+  # ---------------------------------------------------------------------------
+  # FILTER CHAIN
+  # ---------------------------------------------------------------------------
+  - category: Filter
+    name: Sallen-Key Low-Pass Filter Components
+    description: >
+      2nd-order Sallen-Key Butterworth low-pass filter with fc = 46 Hz.
+      Acts as the primary anti-aliasing filter before the ADC. Uses a
+      second op-amp (OPA209 or OPA2209 dual).
+    specifications:
+      topology: "Sallen-Key, unity gain or low gain"
+      order: "2nd order (12 dB/octave)"
+      cutoff_frequency: "46 Hz (-3 dB)"
+      filter_type: "Butterworth (maximally flat passband)"
+      attenuation_at_50Hz: ">= 3 dB"
+      attenuation_at_100Hz: ">= 12 dB"
+    items:
+      - "1x OPA209 or OPA2209 (dual) op-amp"
+      - "2x precision resistors (1%, values per design)"
+      - "2x C0G/NP0 capacitors (values per design)"
+    cost: "$10-15"
+    quantity: 1
+    notes: >
+      The 46 Hz cutoff is chosen to pass all Schumann modes (7.83, 14.3,
+      20.8, 27.3, 33.8 Hz) with minimal attenuation while providing
+      anti-aliasing for typical sampling rates of 100-256 Hz. A 4th-order
+      cascade (two Sallen-Key stages) is recommended for sharper rolloff
+      if 50/60 Hz mains interference is strong.
+    references:
+      - "Gazquez Parra et al. 2015"
+
+  - category: Filter
+    name: Twin-T Notch Filter Components
+    description: >
+      Passive Twin-T notch filter tuned to 50 Hz (or 60 Hz for North
+      America) to reject power-line fundamental interference. Cascaded
+      with an active stage for deeper rejection.
+    specifications:
+      topology: "Twin-T with active feedback (bootstrapped Q)"
+      notch_frequency: "50 Hz (EU/Asia/Africa) or 60 Hz (Americas)"
+      notch_depth: ">= 30 dB (single stage), >= 50 dB (cascaded)"
+      Q_factor: "10-20 (with active feedback)"
+    items:
+      - "6x precision resistors (0.1% for critical values)"
+      - "3x precision capacitors (C0G/NP0, 1% tolerance)"
+      - "1x op-amp (feedback amplifier, OPA209 or equivalent)"
+    cost: "$5-8"
+    quantity: 1
+    notes: >
+      Component matching is critical for deep notch depth. Use 0.1%
+      resistors or hand-match from a batch. Two cascaded stages provide
+      50+ dB rejection at the mains frequency. For 60 Hz regions,
+      recalculate component values. Consider adding a second notch at
+      the 2nd harmonic (100/120 Hz) if sampling above 200 Hz.
+    references:
+      - "Christofilakis et al. 2018"
+
+  - category: Filter
+    name: Variable Gain Stage Components
+    description: >
+      Post-filter variable gain stage to match signal level to the ADC
+      input range. Adjustable from 1x to 21x (0 to 26 dB).
+    specifications:
+      gain_range: "1x to 21x (0-26 dB)"
+      topology: "Non-inverting amplifier with selectable feedback resistors"
+      adjustment: "DIP switch or potentiometer"
+    items:
+      - "1x op-amp (OPA209 or equivalent)"
+      - "1x 10k precision potentiometer or DIP switch resistor network"
+      - "2x precision resistors (gain-setting)"
+    cost: "$4-6"
+    quantity: 1
+    notes: >
+      This stage compensates for different coil sensitivities and site
+      conditions. Set gain so the largest expected signal (during
+      geomagnetic storms) does not clip the ADC. Typical initial
+      setting: 10x (20 dB).
+
+  # ---------------------------------------------------------------------------
+  # DATA ACQUISITION
+  # ---------------------------------------------------------------------------
+  - category: ADC
+    name: ADS1256 24-bit Delta-Sigma ADC Module
+    description: >
+      High-resolution 24-bit delta-sigma ADC with programmable gain
+      amplifier (PGA) and SPI interface. Provides the precision needed
+      to resolve sub-picotesla Schumann resonance signals.
+    specifications:
+      resolution: "24 bits (23 effective at 30 kSPS)"
+      max_sample_rate: "30,000 SPS"
+      typical_sample_rate: "100-256 SPS (for SR monitoring)"
+      input_channels: "8 single-ended or 4 differential"
+      pga_gains: "1, 2, 4, 8, 16, 32, 64"
+      interface: "SPI (CPOL=0, CPHA=1)"
+      supply_voltage: "5V analog, 3.3V digital"
+      noise_at_100sps: "0.4 uV RMS (PGA=1)"
+      input_range: "+/- 5V / PGA gain"
+    cost: "$15-25"
+    quantity: 1
+    notes: >
+      Use 100-256 SPS for Schumann resonance monitoring. The ADS1256's
+      internal digital filter provides excellent 50/60 Hz rejection when
+      configured for certain data rates (e.g., 50 SPS gives exactly
+      one mains cycle rejection). Differential input mode is strongly
+      recommended to reject common-mode interference. PGA gain of 1 or 2
+      is typical after the analog gain stages.
+    references:
+      - "Texas Instruments ADS1256 datasheet"
+      - "Gazquez Parra et al. 2015"
+
+  # ---------------------------------------------------------------------------
+  # COMPUTING
+  # ---------------------------------------------------------------------------
+  - category: Computing
+    name: Raspberry Pi 4 Model B (2GB+)
+    description: >
+      Single-board computer running the EarthSync firmware for data
+      acquisition, local processing, and network upload.
+    specifications:
+      processor: "Broadcom BCM2711, quad-core Cortex-A72, 1.5 GHz"
+      ram: "2 GB minimum (4 GB recommended)"
+      storage: "32 GB microSD (Class 10 / A2)"
+      interfaces: "SPI, UART, I2C, GPIO, USB, Ethernet, WiFi"
+      power: "5V, 3A via USB-C"
+      os: "Raspberry Pi OS Lite (64-bit)"
+    cost: "$45-75"
+    quantity: 1
+    alternatives:
+      - name: "Raspberry Pi Zero 2 W"
+        notes: "Lower power draw (~1W), sufficient for basic acquisition"
+      - name: "Orange Pi 3B"
+        notes: "Cheaper alternative with similar specs"
+    notes: >
+      The Pi 4 provides ample processing power for real-time PSD
+      computation, peak detection, and network streaming. Enable SPI
+      interface in raspi-config. For remote/solar-powered installations,
+      consider the Pi Zero 2 W for lower power consumption (~1W idle
+      vs ~3W for Pi 4).
+    references:
+      - "Raspberry Pi Foundation documentation"
+
+  # ---------------------------------------------------------------------------
+  # TIMING
+  # ---------------------------------------------------------------------------
+  - category: Timing
+    name: u-blox NEO-M8 GPS Module
+    description: >
+      GPS receiver providing precise UTC timestamps and a 1 PPS
+      (pulse-per-second) signal for sample synchronization across
+      geographically distributed stations.
+    specifications:
+      position_accuracy: "2.5 m CEP"
+      time_accuracy: "30 ns (1 PPS)"
+      channels: "72-channel, GPS/GLONASS/BeiDou/Galileo"
+      interface: "UART (9600-115200 baud) + 1 PPS output"
+      supply_voltage: "2.7-3.6V"
+      current: "25 mA tracking"
+      antenna: "Active or passive patch antenna"
+    cost: "$12-18"
+    quantity: 1
+    notes: >
+      The 1 PPS signal is critical for inter-station synchronization.
+      Connect PPS to a GPIO pin with interrupt capability. NTP alone is
+      insufficient; PPS provides sub-microsecond timing alignment needed
+      for cross-station correlation analysis. Ensure clear sky view for
+      the antenna.
+    references:
+      - "u-blox NEO-M8 datasheet"
+
+  # ---------------------------------------------------------------------------
+  # POWER
+  # ---------------------------------------------------------------------------
+  - category: Power
+    name: Battery and Power Management
+    description: >
+      Battery-powered operation is essential to avoid 50/60 Hz mains
+      coupling into the sensitive analog front-end. Solar charging
+      enables indefinite remote operation.
+    items:
+      - name: "LiPo Battery Pack"
+        specification: "3.7V, 10,000-20,000 mAh"
+        cost: "$15-30"
+        notes: "Provides 8-24 hours of operation depending on Pi model"
+      - name: "Solar Charge Controller (MPPT)"
+        specification: "6V/12V input, 5V USB output, LiPo charging"
+        cost: "$10-15"
+        notes: "Waveshare Solar Power Manager or equivalent"
+      - name: "Solar Panel"
+        specification: "6V, 3-6W monocrystalline"
+        cost: "$10-20"
+        notes: "Sufficient for continuous Pi Zero operation, intermittent Pi 4"
+      - name: "5V Buck/Boost Converter"
+        specification: "3.0-4.2V input, 5.1V/3A output, low ripple"
+        cost: "$5-8"
+        notes: "Choose switching converter with < 10 mV ripple; add LC filter"
+      - name: "Analog Supply Regulator"
+        specification: "Low-noise LDO, +/- 9V or +/- 12V for op-amps"
+        cost: "$5-10"
+        notes: "Separate analog supply from digital; use ADP7118 or similar"
+    cost: "$45-83"
+    quantity: 1
+    notes: >
+      Keep analog and digital power domains strictly separated with
+      independent regulators and a single-point ground connection. The
+      analog LDO supply must have noise < 10 uV RMS in the 1-100 Hz
+      band. Battery operation eliminates the dominant source of 50/60 Hz
+      interference in urban/suburban environments.
+
+  # ---------------------------------------------------------------------------
+  # ENCLOSURE AND MECHANICAL
+  # ---------------------------------------------------------------------------
+  - category: Enclosure
+    name: Weatherproof Enclosure and Mechanical Parts
+    description: >
+      IP65-rated enclosure for the electronics, plus mounting hardware
+      for the sensor coil and solar panel.
+    items:
+      - name: "ABS Junction Box (IP65)"
+        specification: "200x150x100 mm minimum"
+        cost: "$10-15"
+        notes: "For Raspberry Pi, ADC, and power electronics"
+      - name: "PVC Pipe for Coil Housing"
+        specification: "50-75 mm diameter, length matching coil"
+        cost: "$5-10"
+        notes: "Houses and protects the induction coil sensor"
+      - name: "Cable Glands (IP68)"
+        specification: "PG7 and PG9 sizes"
+        cost: "$3-5"
+        notes: "Waterproof cable entry for sensor, GPS antenna, power"
+      - name: "Copper Earth Rod"
+        specification: "1.2 m, 10 mm diameter, with clamp"
+        cost: "$8-12"
+        notes: "For grounding the sensor shield and enclosure"
+      - name: "Assorted Hardware"
+        specification: "Standoffs, screws, cable ties, thermal paste"
+        cost: "$5-10"
+        notes: "M3 brass standoffs for PCB mounting"
+    cost: "$31-52"
+    quantity: 1
+    notes: >
+      Sensor coil must be outdoors and away from the electronics
+      enclosure (minimum 2 m separation to avoid digital noise coupling).
+      Use shielded cable (e.g., RG-174 coaxial) between coil and
+      electronics. Pot the coil in epoxy or paraffin wax for moisture
+      protection and mechanical stability.
+
+  # ---------------------------------------------------------------------------
+  # CABLING
+  # ---------------------------------------------------------------------------
+  - category: Cabling
+    name: Cables and Connectors
+    description: >
+      Shielded cables for analog signal path and connectors for
+      inter-board and external connections.
+    items:
+      - name: "Shielded Coaxial Cable (RG-174 or similar)"
+        specification: "5-50 m, 50-ohm, BNC terminated"
+        cost: "$5-15"
+        notes: "Sensor to preamplifier connection; keep as short as possible"
+      - name: "BNC Connectors"
+        specification: "Panel-mount and cable-mount, 4 pairs"
+        cost: "$5-8"
+        notes: "For sensor input and inter-stage test points"
+      - name: "SPI Ribbon Cable"
+        specification: "6-conductor, 20 cm, IDC connectors"
+        cost: "$2-3"
+        notes: "ADS1256 to Raspberry Pi SPI connection"
+      - name: "GPS Antenna Cable"
+        specification: "SMA to u.FL, 15-30 cm"
+        cost: "$3-5"
+        notes: "If using external GPS antenna"
+    cost: "$15-31"
+    quantity: 1
+    notes: >
+      All analog signal cables must be shielded. Ground the shield at
+      one end only (the amplifier/ADC end) to prevent ground loops.
+      Keep digital cables (SPI, USB) physically separated from analog
+      signal cables by at least 5 cm.
+
+# ---------------------------------------------------------------------------
+# COST SUMMARY
+# ---------------------------------------------------------------------------
+cost_summary:
+  sensor: "$50-150"
+  preamplifier: "$11-17"
+  filter_chain: "$19-29"
+  adc: "$15-25"
+  computing: "$45-75"
+  timing: "$12-18"
+  power: "$45-83"
+  enclosure: "$31-52"
+  cabling: "$15-31"
+  total: "$243-480"
+  typical_build: "$300-350"
+  notes: >
+    Costs assume single-unit quantities from common distributors
+    (Mouser, DigiKey, Amazon, AliExpress). Significant savings possible
+    by sourcing the induction coil core material and winding the coil
+    manually rather than purchasing a commercial magnetometer. The total
+    range of $243-480 encompasses minimal portable builds at the low
+    end and full fixed-station builds with longer coils and better
+    enclosures at the high end. A typical build comes in at $300-350.
+
+tools_required:
+  - "Soldering iron (temperature-controlled, fine tip)"
+  - "Multimeter (DC voltage, resistance, capacitance)"
+  - "Oscilloscope (optional but strongly recommended for debugging)"
+  - "Wire strippers, flush cutters, tweezers"
+  - "Drill and step drill bit (for enclosure cable gland holes)"
+  - "Coil winding jig or lathe (for sensor construction)"
+  - "Hot air gun or heat shrink (for cable terminations)"

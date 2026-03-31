@@ -1,0 +1,10 @@
+# Bandit security scanner configuration
+skips:
+  - B101  # assert used in tests (handled by ruff S101)
+  - B104  # hardcoded bind 0.0.0.0 — intentional for Docker server
+  - B603  # subprocess call — not used
+  - B607  # partial executable path — not used
+exclude_dirs:
+  - tests
+  - .venv
+  - node_modules

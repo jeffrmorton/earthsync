@@ -1,0 +1,72 @@
+services:
+  simulator1:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    environment:
+      EARTHSYNC_SIMULATOR_STATION_ID: simulator1
+      EARTHSYNC_SIMULATOR_STATION_MODEL: sierra_nevada
+      EARTHSYNC_SIMULATOR_LATITUDE: "37.0"
+      EARTHSYNC_SIMULATOR_LONGITUDE: "-3.4"
+      EARTHSYNC_SIMULATOR_INTERVAL_MS: "10000"
+      EARTHSYNC_SIMULATOR_SEGMENT_DURATION_S: "10"
+      EARTHSYNC_SIMULATOR_REDIS_HOST: redis
+      EARTHSYNC_SIMULATOR_REDIS_PORT: "6379"
+      EARTHSYNC_SIMULATOR_REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 128M
+    restart: unless-stopped
+
+  simulator2:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    environment:
+      EARTHSYNC_SIMULATOR_STATION_ID: simulator2
+      EARTHSYNC_SIMULATOR_STATION_MODEL: modra
+      EARTHSYNC_SIMULATOR_LATITUDE: "48.37"
+      EARTHSYNC_SIMULATOR_LONGITUDE: "17.27"
+      EARTHSYNC_SIMULATOR_INTERVAL_MS: "10000"
+      EARTHSYNC_SIMULATOR_SEGMENT_DURATION_S: "10"
+      EARTHSYNC_SIMULATOR_REDIS_HOST: redis
+      EARTHSYNC_SIMULATOR_REDIS_PORT: "6379"
+      EARTHSYNC_SIMULATOR_REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 128M
+    restart: unless-stopped
+
+  simulator3:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    environment:
+      EARTHSYNC_SIMULATOR_STATION_ID: simulator3
+      EARTHSYNC_SIMULATOR_STATION_MODEL: heartmath
+      EARTHSYNC_SIMULATOR_LATITUDE: "37.5"
+      EARTHSYNC_SIMULATOR_LONGITUDE: "-122.2"
+      EARTHSYNC_SIMULATOR_INTERVAL_MS: "10000"
+      EARTHSYNC_SIMULATOR_SEGMENT_DURATION_S: "10"
+      EARTHSYNC_SIMULATOR_REDIS_HOST: redis
+      EARTHSYNC_SIMULATOR_REDIS_PORT: "6379"
+      EARTHSYNC_SIMULATOR_REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 128M
+    restart: unless-stopped

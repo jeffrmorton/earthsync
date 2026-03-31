@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+@theme {
+  /* Dark palette matching Lucid BCI project */
+  --color-bg-primary: #0a0a0f;
+  --color-bg-secondary: #12121a;
+  --color-bg-panel: #1a1a2e;
+  --color-bg-hover: #252540;
+
+  --color-text-primary: #e2e2e8;
+  --color-text-secondary: #a0a0b0;
+  --color-text-muted: #606070;
+
+  --color-accent-blue: #4a9eff;
+  --color-accent-green: #4ade80;
+  --color-accent-yellow: #fbbf24;
+  --color-accent-red: #f87171;
+  --color-accent-purple: #a78bfa;
+
+  /* SR mode colors */
+  --color-sr-mode1: #4a9eff;
+  --color-sr-mode2: #4ade80;
+  --color-sr-mode3: #fbbf24;
+  --color-sr-mode4: #f87171;
+  --color-sr-mode5: #a78bfa;
+  --color-sr-mode6: #38bdf8;
+  --color-sr-mode7: #fb923c;
+  --color-sr-mode8: #e879f9;
+
+  --color-border: #2a2a40;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}

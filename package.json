@@ -1,0 +1,18 @@
+{
+  "name": "earthsync",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Open-source citizen science platform for distributed Schumann Resonance monitoring",
+  "scripts": {
+    "dev": "cd web && pnpm dev",
+    "build": "cd web && pnpm build",
+    "test": "cd web && pnpm test",
+    "lint": "cd web && pnpm lint",
+    "format": "cd web && pnpm format",
+    "typecheck:python": "cd server && uv run pyright src/ && cd ../simulator && uv run pyright src/ && cd ../firmware && uv run pyright src/",
+    "typecheck:web": "cd web && pnpm typecheck",
+    "security:python": "cd server && uv run bandit -r src/ -c ../bandit.yaml",
+    "dead-code": "cd server && uv run vulture src/ ../vulture_whitelist.py --min-confidence 80"
+  },
+  "license": "MIT"
+}
